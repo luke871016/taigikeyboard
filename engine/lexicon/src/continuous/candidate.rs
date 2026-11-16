@@ -194,9 +194,11 @@ pub(super) fn record_to_candidate(
     // exact miss; absent entries fall through to `FrequencyData::default()`
     // (count = 0, last_used_ms = 0) → `user_weight = 0.0`, the cold-start
     // neutral path.
+    // An abbreviation hit ranks by the picks made through an abbreviation
+    // only: a reading's picks never lift it, nor its picks the reading.
     let user_weight = freq_map
         .get(&display_text, &canonical_tl)
-        .user_weight(now_ms);
+        .weight_for(coverage_kind == COVERAGE_KIND_ABBREV, now_ms);
     let context_rank = context.rank(&display_text, &canonical_tl);
     let score = calculate_continuous_score(frequency, syllable_count);
     RawCandidate {
@@ -296,9 +298,11 @@ pub(super) fn custom_entry_to_candidate(
     // `record_to_candidate`. For a hanji-absent custom/OOV entry
     // `display_text == canonical_tl`; the tolerant `get` still falls back
     // to the legacy `tl == ""` bucket on an exact miss.
+    // An abbreviation hit ranks by the picks made through an abbreviation
+    // only: a reading's picks never lift it, nor its picks the reading.
     let user_weight = freq_map
         .get(&display_text, &canonical_tl)
-        .user_weight(now_ms);
+        .weight_for(coverage_kind == COVERAGE_KIND_ABBREV, now_ms);
     let context_rank = context.rank(&display_text, &canonical_tl);
     let syllable_count = tl_syllable_count(&canonical_tl);
     // `frequency = 0` (D4) → score 0; the candidate floats on
