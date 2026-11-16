@@ -39,6 +39,7 @@ pub(super) fn roundtrip(
     let request_id = request.id;
     log::debug!("[engine->] op={op} id={request_id} generation={generation}");
 
+    install_dev_proposal_once();
     let response_bytes = dispatch::process_request(&request.encode_to_vec());
     let response = match Response::decode(response_bytes.as_slice()) {
         Ok(response) => response,
@@ -313,4 +314,35 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(a, 0);
     }
+}
+
+/// LOCAL DEV ONLY — never merge. With `TAIGI_DEV_PROPOSAL` set, install the
+/// web /dev page's "proposal" preset (`web/src/dev.js` `PROPOSAL`) on each
+/// engine thread once. The sort order is thread-local in the engine.
+fn install_dev_proposal_once() {
+    thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    DONE.with(|done| {
+        if done.replace(true) {
+            return;
+        }
+        if std::env::var_os("TAIGI_DEV_PROPOSAL").is_none() {
+            return;
+        }
+        let ok = dispatch::set_dev_sort_order(&[
+            "tier",
+            "preference_class",
+            "coverage_kind",
+            "user_weight",
+            "abbreviation",
+            "context_rank",
+            "walker_cost",
+            "score",
+            "frequency",
+            "coverage",
+            "source_rank",
+            "stable_idx",
+        ]);
+        dispatch::set_dev_rank_one_word_path(true);
+        log::info!("TAIGI_DEV_PROPOSAL: proposal ranking installed (sort order ok={ok})");
+    });
 }
