@@ -1,0 +1,68 @@
+name: Fork web preview
+
+# Fork-only: deploys one branch's web version to this fork's GitHub Pages so
+# testers can try a feature before it is merged. Never part of an upstream PR.
+# Build steps mirror `deploy.yml` in docs/architecture/web-release.md.
+# Run: gh workflow run fork-preview.yml --repo <owner>/taigikeyboard -f ref=<branch>
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to deploy
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Name the commit
+        run: echo "ref ${{ inputs.ref }} at $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: 2026.11.2
+          install_args: protoc github:wasm-bindgen/wasm-bindgen github:WebAssembly/binaryen uv pipx:fonttools zig
+
+      - name: Install the toolchain (web/rust-toolchain.toml)
+        working-directory: web
+        run: rustup toolchain install --no-self-update
+
+      - name: Stage the site
+        run: make -C web site
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: web/target/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          timeout: 120000
