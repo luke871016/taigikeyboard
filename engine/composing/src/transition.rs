@@ -46,9 +46,8 @@ use protos::engine::effect;
 use protos::engine::AppConfig;
 use protos::engine::{
     ClearCandidates, ClearPreeditWithoutCommit, CommitOutcome, CommitTextReplacingPreedit,
-    CommittedWord, ComposingResponse, Effect, NextWordClearForNewComposing,
-    NextWordUpdateLastSelectedWord, NextWordWordSelected, RefreshCandidates, ResetCandidateContext,
-    UpdatePreedit,
+    CommittedWord, ComposingResponse, Effect, NextWordClearForNewComposing, NextWordWordSelected,
+    RefreshCandidates, ResetCandidateContext, UpdatePreedit,
 };
 
 /// Learned phrases (§50) — the longest composition the final commit turns
@@ -309,8 +308,6 @@ fn move_caret(
     }
     resp
 }
-
-// ---- Helpers ------------------------------------------------------
 
 // Pending-tail edits around the caret. `caret` is a char boundary in
 // `0..=raw.len()`; each returns the new buffer and the new caret.
@@ -707,29 +704,20 @@ fn unnail_last(
         UnnailedCaret::BeforeIt => 0,
     };
     let new_pending = popped.raw_text + &tail;
-    // Unnail handshake. NextWord learns nothing from it and keeps its
-    // committed context (behavioral-invariants §40) — the popped segment can
-    // no longer reach NextWord at all, because only the final commit's
-    // `preceding` carries nailed segments. Applied by `dispatch` in this same
-    // call (roadmap E2); canonical key per v3.5.8 Phase 9 Bug 1 (Option A).
-    // A segment nailed as shown is no word the user selected (B4): the
-    // handshake names only a picked one.
-    let nextword_correction = match nailed.last() {
-        Some(prev) if prev.is_picked => next_word_update_last_selected_word(
-            prev.canonical_text.clone(),
-            // R2: canonical TL (raw-slice fallback), as the commit path.
-            association_roman(&prev.association_tl, &prev.raw_text),
-        ),
-        _ => next_word_clear_for_new_composing(),
-    };
+    // Unnailing back to a picked segment tells NextWord nothing: it learns
+    // nothing from nailed segments and keeps its committed context
+    // (behavioral-invariants §40) — only the final commit's `preceding`
+    // carries them. Back to a segment nailed as shown, or to none, NextWord
+    // clears for a new composition (B4: such a segment is no word the user
+    // selected). Applied by `dispatch` in this same call (roadmap E2).
+    let mut effects = Vec::with_capacity(3);
+    if !matches!(nailed.last(), Some(prev) if prev.is_picked) {
+        effects.push(next_word_clear_for_new_composing());
+    }
     set_continuous_walked_afresh(state, new_pending, caret, nailed, config, frequency);
 
     let preedit = phase_preedit(&state.phase, config);
-    let effects = vec![
-        nextword_correction,
-        update_preedit(&preedit),
-        refresh_candidates(),
-    ];
+    effects.extend([update_preedit(&preedit), refresh_candidates()]);
     ComposingResponse {
         preedit: Some(preedit),
         effect: effects,
@@ -754,8 +742,7 @@ fn commit_raw(state: &mut EngineState, config: &AppConfig) -> ComposingResponse 
 /// tail — in one `CommitTextReplacingPreedit`, because under Model B the
 /// nailed segments were never written to the document (they lived in the
 /// marked region). This replaces the single marked region with the literal
-/// finalized string. The per-nailed-segment NextWord associations already
-/// fired as `NextWordUpdateLastSelectedWord` at nail time; this emits the
+/// finalized string. Nailing told NextWord nothing; this emits the
 /// **single terminal** `NextWordWordSelected` for the last "word": the
 /// pending tail when one exists, else the last nailed segment.
 ///
@@ -862,8 +849,6 @@ fn noop(state: &EngineState, config: &AppConfig) -> ComposingResponse {
     snapshot(state, config)
 }
 
-// ---- Continuous-phase helpers --------------------------------------
-
 /// `Intent::Start { text }` arriving while in `Phase::Continuous`. Codex
 /// post-impl finding #3: silently dropping `text` would lose user input.
 /// Treats the intent as "drop continuous state, then begin a fresh
@@ -945,15 +930,11 @@ fn nail_segment(
     }
     let mut new_nailed = nailed.clone();
     let new_pending = raw[consumed_bytes..].to_string();
-    // R2: the NextWord `roman` arg — canonical TL when the platform sent
-    // it, else the raw committed slice (legacy / TPS-OOV fallback). Used
-    // for whichever single effect this commit fires below (final OR mid).
-    let next_word_roman = association_roman(&association_tl, &raw[..consumed_bytes]);
     let segment = picked_segment(
         &new_nailed,
         raw[..consumed_bytes].to_string(),
         display_text,
-        canonical.clone(),
+        canonical,
         association_tl,
         hanji,
         syllable_count,
@@ -969,14 +950,17 @@ fn nail_segment(
         // Pending is empty here, so the whole composition is just the
         // nailed prefix (combined_display would append derived("") = "").
         let combined = nailed_prefix(&new_nailed, config);
-        // `nailed` = every segment before the one just pushed.
-        let terminal = next_word_terminal(canonical, next_word_roman, nailed);
+        // The segment just pushed is the picked terminal word; R2: its
+        // canonical TL (raw-slice fallback) is the NextWord `roman`.
+        let terminal = next_word_nailed_terminal(&new_nailed);
         // Learned phrases (§50): the whole composition, if it was a
         // sequence of hanji picks, becomes one learned pair.
         let learned = learned_phrase(&new_nailed, config);
+        let learned_counts_as_picked = learned.is_some() && holds_a_romanized_pick(&new_nailed);
         let applied = Applied {
             response: finalize(state, combined, terminal),
             learned,
+            learned_counts_as_picked,
             usage: None,
         };
         return (applied, CommitOutcome::Finalized);
@@ -988,13 +972,7 @@ fn nail_segment(
     // to the end of the tail that is left.
     let caret = new_pending.len();
     set_continuous(state, new_pending, caret, new_nailed, config, frequency);
-    let response = nailed_response(
-        state,
-        config,
-        canonical,
-        next_word_roman,
-        refresh_candidates(),
-    );
+    let response = nailed_response(state, config, refresh_candidates());
     (response.into(), CommitOutcome::Nailed)
 }
 
@@ -1030,21 +1008,17 @@ fn picked_segment(
     }
 }
 
-/// The answer of a pick that keeps composing: the preedit, the nail
-/// handshake, then `list_effect` — what becomes of the candidate list.
+/// The answer of a pick that keeps composing: the preedit, then
+/// `list_effect` — what becomes of the candidate list. No next-word
+/// handshake: a nailed segment teaches nothing until the final commit's
+/// `preceding` carries it (behavioral-invariants §40).
 fn nailed_response(
     state: &EngineState,
     config: &AppConfig,
-    canonical_text: String,
-    next_word_roman: String,
     list_effect: Effect,
 ) -> ComposingResponse {
     let preedit = phase_preedit(&state.phase, config);
-    let effects = vec![
-        update_preedit(&preedit),
-        next_word_update_last_selected_word(canonical_text, next_word_roman),
-        list_effect,
-    ];
+    let effects = vec![update_preedit(&preedit), list_effect];
     ComposingResponse {
         preedit: Some(preedit),
         effect: effects,
@@ -1159,12 +1133,11 @@ fn nail_pick_keeping_composition(
         new_nailed.push(segment);
     }
     let raw_text = raw[start..consumed_bytes].to_string();
-    let next_word_roman = association_roman(&association_tl, &raw_text);
     let segment = picked_segment(
         &new_nailed,
         raw_text,
         display_text,
-        canonical_text.clone(),
+        canonical_text,
         association_tl,
         hanji,
         syllable_count,
@@ -1173,13 +1146,7 @@ fn nail_pick_keeping_composition(
     let rest = raw[consumed_bytes..].to_string();
     let caret = rest.len();
     set_continuous_walked_afresh(state, rest, caret, new_nailed, config, frequency);
-    let response = nailed_response(
-        state,
-        config,
-        canonical_text,
-        next_word_roman,
-        clear_candidates(),
-    );
+    let response = nailed_response(state, config, clear_candidates());
     (response.into(), CommitOutcome::Nailed)
 }
 
@@ -1207,9 +1174,11 @@ fn commit_as_shown(state: &mut EngineState, config: &AppConfig) -> Applied {
     } else {
         (next_word_clear_for_new_composing(), None)
     };
+    let learned_counts_as_picked = learned.is_some() && holds_a_romanized_pick(nailed);
     Applied {
         response: finalize_composition(state, text, terminal, config),
         learned,
+        learned_counts_as_picked,
         usage: None,
     }
 }
@@ -1377,14 +1346,6 @@ fn confirm_composition_then_insert(
         );
         let mut resolution = finalized_composition_resolution(committed, config);
         resolution.leaves_trailing_auto_space = insert.leaves_trailing_auto_space;
-        // Preserve a partial pick's learning handshake, without exposing its
-        // transient preedit or refetch request to the host.
-        applied.response.effect.retain(|effect| {
-            matches!(
-                effect.kind,
-                Some(effect::Kind::NextWordUpdateLastSelectedWord(_))
-            )
-        });
         // A TPS pick can leave the composition all nailed with no raw tail.
         // Use normal confirmation learning: only fully picked compositions
         // teach words/phrases; unpicked segments or a pending tail teach none.
@@ -1396,9 +1357,9 @@ fn confirm_composition_then_insert(
             }
         }
         applied.learned = finished.learned;
-        applied.response.effect.extend(finished.response.effect);
+        // The host sees only the finished composition's effects, never the
+        // partial pick's transient preedit or refetch request.
         applied.response = ComposingResponse {
-            effect: applied.response.effect,
             commit: Some(resolution),
             ..finished.response
         };
@@ -1431,11 +1392,13 @@ fn confirm_composition_then_insert(
 /// `Intent::CommitPrediction` (D1): the document text a NextWord prediction
 /// tap writes, resolved by the Continuous pick's resolver
 /// ([`resolve_commit_text`]), and its usage. The composition is left as it is
-/// (the snapshot answers it unchanged). No Hanji, no `canonical_text`, no
-/// script, a script the prediction lacks, or an empty document text is
-/// ignored: no usage. The usage is counted under `canonical_text`, the stored
-/// spelling, not the shown `hanji`; it carries no `hanji`, so counting it
-/// touches no learned phrase.
+/// (the snapshot answers it unchanged). Neither Hanji nor romanization, no
+/// `canonical_text`, no script, a script the prediction lacks, or an empty
+/// document text is ignored: no usage. A prediction without Hanji is a word
+/// written in romanization (Hàn-Lô lām, §42) and writes its romanization. The
+/// usage is counted under `canonical_text`, the stored spelling, not the
+/// shown `hanji`; it carries no `hanji`, so counting it touches no learned
+/// phrase.
 fn commit_prediction(
     state: &EngineState,
     script: Option<CommitScript>,
@@ -1445,9 +1408,10 @@ fn commit_prediction(
     canonical_text: String,
     config: &AppConfig,
 ) -> Applied {
+    let hanji = Some(hanji.as_str()).filter(|hanji| !hanji.is_empty());
     let resolved = script
-        .filter(|_| !hanji.is_empty() && !canonical_text.is_empty())
-        .and_then(|script| resolve_commit_text(script, roman, Some(&hanji), config))
+        .filter(|_| (hanji.is_some() || !roman.is_empty()) && !canonical_text.is_empty())
+        .and_then(|script| resolve_commit_text(script, roman, hanji, config))
         // A Hanji-only prediction led by its (absent) romanization — the swap
         // turned off between the strip and the tap — writes nothing.
         .filter(|resolved| !resolved.text.is_empty());
@@ -1462,6 +1426,7 @@ fn commit_prediction(
     Applied {
         response,
         learned: None,
+        learned_counts_as_picked: false,
         usage,
     }
 }
@@ -1484,8 +1449,6 @@ fn append_continuous(
     let (new_pending, caret) = insert_at_caret(&pending, caret, ch);
     step_continuous(state, new_pending, caret, nailed, config, frequency)
 }
-
-// ---- Effect constructors ------------------------------------------
 
 fn update_preedit(preedit: &Preedit) -> Effect {
     Effect {
@@ -1573,14 +1536,6 @@ pub(crate) fn association_roman(association_tl: &str, raw_text: &str) -> String 
     }
 }
 
-fn next_word_update_last_selected_word(text: String, roman: String) -> Effect {
-    Effect {
-        kind: Some(effect::Kind::NextWordUpdateLastSelectedWord(
-            NextWordUpdateLastSelectedWord { text, roman },
-        )),
-    }
-}
-
 /// Sets `CommitResolution.taught_next_word` from the commit's handshake
 /// ([`next_word_terminal`]), so a shell that has the engine apply the
 /// handshakes (`ComposingRequest.next_word_context`) need not scan for it.
@@ -1649,6 +1604,13 @@ fn next_word_word_selected(
     }
 }
 
+/// Whether a composition [`learned_phrase`] learned holds a word picked in
+/// romanization (a hanji-less segment, which it admits only under Hàn-Lô
+/// lām): [`Applied::learned_counts_as_picked`].
+fn holds_a_romanized_pick(nailed: &[NailedSegment]) -> bool {
+    nailed.iter().any(|seg| seg.hanji.is_none())
+}
+
 /// Learned phrases (§50) — the `(Hanji, canonical-TL)` pair a final
 /// continuous commit learns from its nailed segments, or `None` when the
 /// composition is not one: fewer than two segments, any segment the user
@@ -1662,23 +1624,55 @@ fn next_word_word_selected(
 /// separator, USER 2026-09-22). The cap counts
 /// the joined TL, not the segments' echoed `syllable_count` — that is
 /// platform input, and the TL is what the phrase stores.
+///
+/// Under Hàn-Lô lām (`AppConfig::lists_roman_twins`) a picked hanji-less
+/// segment whose reading is a dictionary word — a word written in
+/// romanization — stands in the phrase as its canonical TL, as the
+/// whole-sentence candidate writes it (`我kap伊`), with a space between two
+/// romanized words (`我 kap i` reads `我kap i`) and the `-` / `--` the user
+/// typed in front of one kept (`記--khí-lâi`, `我tsia̍h--ah`). A §34 literal
+/// or typo no dictionary word reads (`asdf`) never learns. The phrase still
+/// needs one Hanji segment, since one in romanization alone is already its
+/// reading's romanization row.
 fn learned_phrase(nailed: &[NailedSegment], config: &AppConfig) -> Option<LearnedEntry> {
     if nailed.len() < 2 {
         return None;
     }
+    // The composition's own mode, as its fetches read it
+    // (`requests::listing_buffer`): Bopomofo typed on a TL / POJ layout is a
+    // TPS buffer, which lists no romanization and so learns none.
+    let raw: String = nailed.iter().map(|seg| seg.raw_text.as_str()).collect();
+    let han_lo =
+        crate::requests::lists_roman_twins(config, crate::derived::buffer_input_mode(&raw, config));
     let mut hanji = String::new();
+    let mut any_hanji = false;
     for seg in nailed {
-        if !seg.is_picked {
+        if !seg.is_picked || seg.association_tl.is_empty() {
             return None;
         }
-        // `commit_continuous` stored an empty hanji as `None` already. The
-        // phrase stores the segment's stored spelling (`canonical_text`), not
-        // the shown Hanji, which POJ mode renders.
-        seg.hanji.as_deref()?;
-        if seg.association_tl.is_empty() {
-            return None;
-        }
+        // `commit_continuous` stored an empty hanji as `None` already. A
+        // Hanji piece is the segment's stored spelling (`canonical_text`),
+        // not the shown Hanji, which POJ mode renders.
+        let Some(_) = seg.hanji else {
+            if !han_lo || !crate::nailed::reading_is_dictionary_word(&seg.association_tl, config) {
+                return None;
+            }
+            let piece = &seg.association_tl;
+            let run = crate::nailed::typed_separator_run(&seg.raw_text);
+            if !hanji.is_empty() && !run.is_empty() && !piece.starts_with('-') {
+                // The separator kind the user typed (`canonical_separators`).
+                hanji.push_str(if run.len() >= 2 { "--" } else { "-" });
+            } else if crate::commit_text::spaces_romanized_words(&hanji, piece) {
+                hanji.push(' ');
+            }
+            hanji.push_str(piece);
+            continue;
+        };
+        any_hanji = true;
         hanji.push_str(&phonetics::api::strip_khinsiann_hanji(&seg.canonical_text));
+    }
+    if !any_hanji {
+        return None;
     }
     let canonical_tl = canonical_separators(&crate::nailed::learned_reading(nailed, config));
     let syllable_count = phonetics::api::tl_syllables(&canonical_tl).count();

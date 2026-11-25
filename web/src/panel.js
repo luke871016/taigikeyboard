@@ -103,6 +103,12 @@ export class Panel {
   /** @type {Animation[]} */
   #unfolding = [];
   /**
+   * The last point `place` was asked for while a mode change played, placed
+   * once it ends; `null` when none waits.
+   * @type {CaretPoint | null}
+   */
+  #placeAfterUnfold = null;
+  /**
    * That copy while the change plays: the drawings the new mode does not have.
    * @type {HTMLElement | null}
    */
@@ -467,7 +473,7 @@ export class Panel {
    * fading in on the grid or out with it. Tracks carry frames; only their
    * differences are used, so every drawing moves relative to where the
    * page drew it. After `place`: an animation changes what `offsetHeight`
-   * reads.
+   * reads, so a `place` while it plays waits for its end.
    * @returns {void}
    */
   #startUnfold() {
@@ -507,7 +513,11 @@ export class Panel {
     );
     window.onfinish = () => {
       if (this.#unfolding[0] === window) {
+        const point = this.#placeAfterUnfold;
         this.#endUnfold();
+        if (point) {
+          this.place(point);
+        }
       }
     };
     this.#unfolding = [window];
@@ -617,7 +627,9 @@ export class Panel {
 
   /**
    * Stops a mode change mid-way or once played: every drawing back to where
-   * the page put it, the copy gone.
+   * the page put it, the copy gone. A `place` left waiting is dropped: the
+   * callers that stop a change mid-way (`showTable`, `hideTable`) are
+   * followed by their own `place`, or leave the panel hidden.
    * @returns {void}
    */
   #endUnfold() {
@@ -625,6 +637,7 @@ export class Panel {
       animation.cancel();
     }
     this.#unfolding = [];
+    this.#placeAfterUnfold = null;
     this.#ghost?.remove();
     this.#ghost = null;
     this.#list.style.removeProperty("width");
@@ -653,11 +666,18 @@ export class Panel {
    * The composition on the caret's own line, over the text there, and the list
    * under that line, or above it, or beside it where neither has the room: it
    * never covers the composition, Copy or Clear. A caret scrolled out of view
-   * leaves both at the editor's edge.
+   * leaves both at the editor's edge. While a fold or unfold plays, the
+   * window's size is the animation's, so the last point asked for waits for
+   * its end (`#startUnfold`).
    * @param {CaretPoint} point
    * @returns {void}
    */
-  place({ left, top, lineHeight }) {
+  place(point) {
+    if (this.#unfolding.length > 0) {
+      this.#placeAfterUnfold = point;
+      return;
+    }
+    const { left, top, lineHeight } = point;
     const editor = this.#editor;
     const preedit = this.#preedit;
     const lineTop = Math.max(0, Math.min(top, editor.clientHeight));
@@ -674,7 +694,7 @@ export class Panel {
       editor.clientHeight,
       window.innerHeight - editor.getBoundingClientRect().top,
     );
-    this.#fitGrid(room);
+    this.#fitList(room);
     const root = this.#root;
     const below = line + height;
     const above = line - root.offsetHeight;
@@ -686,8 +706,16 @@ export class Panel {
       if (above < 0) {
         const after = start + preedit.offsetWidth + LIST_GAP;
         const before = start - root.offsetWidth - LIST_GAP;
-        listLeft = after <= roomRight ? after : Math.max(0, before);
-        listTop = Math.max(0, Math.min(line, room - root.offsetHeight));
+        if (after <= roomRight || before >= 0) {
+          listLeft = after <= roomRight ? after : before;
+          listTop = Math.max(0, Math.min(line, room - root.offsetHeight));
+        } else {
+          // No side holds the whole list: the taller side takes it, and the
+          // list scrolls in what that side has.
+          const roomBelow = room - below;
+          this.#fitList(Math.max(roomBelow, line));
+          listTop = roomBelow >= line ? below : line - root.offsetHeight;
+        }
       }
     }
     root.style.left = `${listLeft}px`;
@@ -696,23 +724,35 @@ export class Panel {
   }
 
   /**
-   * The model's five rows and a half can pass a short editor, which would
-   * cover Copy and Clear: the grid takes what there is and scrolls.
+   * The model's five rows and a half, or a column, can pass a short editor or
+   * the room beside the composition: the list takes what there is and
+   * scrolls. A row is one line, and never has to.
    * @param {number} room
    * @returns {void}
    */
-  #fitGrid(room) {
+  #fitList(room) {
     const list = this.#candidates;
-    if (!list.hasAttribute("data-grid")) {
+    list.style.removeProperty("max-height");
+    if (!list.matches("[data-grid], [data-vertical]")) {
       return;
     }
-    list.style.removeProperty("max-height");
     const excess = this.#root.offsetHeight - room;
     if (excess > 0) {
       list.style.maxHeight = `${list.offsetHeight - excess}px`;
-      list
-        .querySelector('[aria-current="true"]')
-        ?.scrollIntoView({ block: "nearest" });
+      // The list's own scroll only: `scrollIntoView` also scrolls the page,
+      // which a panel still at the last key's place would send down.
+      const cell = list.querySelector('[aria-current="true"]');
+      if (cell) {
+        const cellBox = cell.getBoundingClientRect();
+        const listTop = list.getBoundingClientRect().top;
+        const above = cellBox.top - listTop;
+        const below = cellBox.bottom - listTop - list.clientHeight;
+        if (above < 0) {
+          list.scrollTop += above;
+        } else if (below > 0) {
+          list.scrollTop += below;
+        }
+      }
     }
   }
 

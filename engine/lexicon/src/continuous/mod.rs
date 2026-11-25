@@ -35,7 +35,7 @@
 //!   bits 0..=11 = per-source enables, `u32::MAX` = all sources on.
 //! - User-frequency input is plumbed through [`ContinuousFetchCtx`] —
 //!   `freq_map` (`FrequencyData` keyed by the `(display_text,
-//!   canonical_tl)` PAIR identity, Core Principle #7) plus `now_ms`
+//!   canonical_tl)` PAIR identity, Core Principle #6) plus `now_ms`
 //!   (platform epoch-ms). The engine derives `user_freq_boost(count)` per
 //!   candidate inside `record_to_candidate` / `custom_entry_to_candidate`
 //!   using `BOOST_ALPHA` / `MAX_BOOST` from `ranking::score`; the
@@ -68,6 +68,7 @@ mod candidate;
 mod compound;
 mod edge;
 mod exact;
+mod han_lo;
 mod partial_prefix;
 mod reach;
 mod tone_pin;
@@ -76,7 +77,7 @@ mod toneless_match;
 use reach::{custom_abbreviation_matches, custom_reach, fused_custom_typed_key, CustomReach};
 
 pub use abbrev::fetch_abbrev_candidates;
-pub use compound::compound_hanji_exists;
+pub use compound::{compound_hanji_exists, reading_is_dictionary_word};
 pub use edge::{best_candidate_for_key_with_barriers, homophone_words_for_key, EdgeBest};
 pub use exact::fetch_candidates_for_keys_with_barriers;
 pub use partial_prefix::{
@@ -170,7 +171,7 @@ pub struct RawCandidate {
     pub hanji: Option<String>,
     /// v3.6.1 R2 — canonical TL romanization, the identity sidechannel
     /// for the `(hanji, canonical-TL)` word-identity pair (Core
-    /// Principle #7). Unlike [`roman`] (the DISPLAY romanization that
+    /// Principle #6). Unlike [`roman`] (the DISPLAY romanization that
     /// `requests::handle_fetch_at_pos` recases per typed segment and
     /// rewrites TL→POJ in POJ mode), this stays the canonical TL:
     /// `DictionaryRecord.tl` for `dict.bin` hits ([`record_to_candidate`]),
@@ -329,7 +330,7 @@ pub struct ContinuousFetchCtx<'a> {
     /// `u32::MAX` = every source); tests narrow it to verify filter behaviour.
     pub enabled_sources_bitmask: u32,
     /// User-selection snapshot keyed by the `(display_text, canonical_tl)`
-    /// pair (Core Principle #7). Empty map + `now_ms = 0` is the
+    /// pair (Core Principle #6). Empty map + `now_ms = 0` is the
     /// cold-start neutral.
     pub freq_map: &'a FrequencyMap,
     /// Platform epoch-ms wall clock at fetch time.
@@ -378,6 +379,10 @@ pub struct ContinuousFetchCtx<'a> {
     /// output (`AppConfig.khinsiann_in_hanji`). Used for custom-vs-builtin
     /// displayed-Hanji collision checks.
     pub khinsiann_in_hanji: bool,
+    /// Hàn-Lô lām (`AppConfig::lists_roman_twins`, and the fetch's mode is
+    /// TL / POJ): every reading also offers its romanization as a word of its
+    /// own ([`han_lo`]). `false` = the dictionary rows as stored.
+    pub roman_twins: bool,
 }
 
 /// Span aliases for [`fetch_candidates_for_keys_with_barriers`]: `(start_byte, end_byte)`

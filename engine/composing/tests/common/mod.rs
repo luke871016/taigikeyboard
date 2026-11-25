@@ -447,15 +447,39 @@ pub struct Fetch {
     pub frequency: Vec<Selected>,
     pub custom: Vec<CustomEntry>,
     pub learned: Vec<LearnedEntry>,
+    /// The rows the dispatch layer reads under the sentence walk's inner
+    /// edges (`UserRows::edge_custom` / `edge_learned`).
+    pub edge_custom: Vec<CustomEntry>,
+    pub edge_learned: Vec<LearnedEntry>,
     pub context: ranking::ContextRanks,
+}
+
+/// Every kautian subcollection on — the default on every platform.
+pub fn all_kautian_subcollections() -> protos::engine::KautianSubcollectionToggles {
+    protos::engine::KautianSubcollectionToggles {
+        accent_lukang: true,
+        accent_sansia: true,
+        accent_taipak: true,
+        accent_gilan: true,
+        accent_tainan: true,
+        accent_kaohsiung: true,
+        accent_kinmen: true,
+        accent_makung: true,
+        accent_sintik: true,
+        accent_taichung: true,
+        name_appendix: true,
+        alt_reading: true,
+    }
 }
 
 /// The switches a fresh install has on every platform (desktop
 /// `DictionarySourceToggles::DEFAULT`; iOS / Android defaults agree):
-/// every other source (Taihoa and iTaigi among them) off.
+/// every kautian subcollection on, every other source (Taihoa and iTaigi
+/// among them) off.
 pub fn default_source_toggles() -> DictionarySourceToggles {
     DictionarySourceToggles {
         kautian: true,
+        kautian_subcollections: Some(all_kautian_subcollections()),
         taigitv: true,
         kungge: true,
         stti: true,
@@ -500,6 +524,8 @@ impl Fetch {
                 frequency,
                 custom: self.custom,
                 learned: self.learned,
+                edge_custom: self.edge_custom,
+                edge_learned: self.edge_learned,
             },
             context: self.context,
         }
@@ -561,7 +587,6 @@ pub fn effect_kinds(effects: &[Effect]) -> Vec<&'static str> {
             Kind::ClearCandidates(_) => "ClearCandidates",
             Kind::RefreshCandidates(_) => "RefreshCandidates",
             Kind::ResetCandidateContext(_) => "ResetCandidateContext",
-            Kind::NextWordUpdateLastSelectedWord(_) => "NextWordUpdateLastSelectedWord",
             Kind::NextWordWordSelected(_) => "NextWordWordSelected",
             Kind::NextWordClearForNewComposing(_) => "NextWordClearForNewComposing",
             Kind::NextWordDecided(_) => "NextWordDecided",

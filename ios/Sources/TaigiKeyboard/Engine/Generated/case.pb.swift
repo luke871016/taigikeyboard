@@ -20,9 +20,8 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
-/// Three-state shift / case indicator used by the engine layer.
-/// Mirrors iOS `LetterCase` enum + Android (`caps` + `capsLock` boolean
-/// pair adapted at the bridge call site).
+/// Three-state shift / case indicator. Android adapts its `caps` + `capsLock`
+/// pair at the bridge (`CaseTransformBridge`).
 public nonisolated enum Taigi_Engine_LetterCase: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -78,17 +77,13 @@ public nonisolated enum Taigi_Engine_ToneCaseKind: SwiftProtobuf.Enum, Swift.Cas
   /// Unset — proto schema mismatch; answered with `FAIL_INVARIANT`.
   case unspecified // = 0
 
-  /// Uppercase a single char/grapheme using mode-aware tone tables; for a
-  /// multi-char input (e.g. "tsh") only the first letter. Matches Android
-  /// `ToneUtilities.uppercaseToneLetter` (`replaceFirstChar`).
+  /// Uppercase the first char, keep the rest as typed ("tsh" → "Tsh").
   case uppercaseFirst // = 1
 
-  /// Uppercase ALL characters using mode-aware tone tables (Caps Lock).
-  /// Matches Android `ToneUtilities.fullUppercaseToneLetter`.
+  /// Uppercase every char (Caps Lock).
   case uppercaseAll // = 2
 
-  /// Lowercase a single char/grapheme using mode-aware tone tables. Matches
-  /// Android `ToneUtilities.lowercaseToneLetter`.
+  /// Lowercase every char.
   case lowercase // = 3
   case UNRECOGNIZED(Int)
 
@@ -178,8 +173,7 @@ public nonisolated struct Taigi_Engine_ToneCase: Sendable {
   public init() {}
 }
 
-/// `TransformInputCase` applies the LetterCase to `text` per
-/// `CaseTransformer.transformForInput` semantics:
+/// `TransformInputCase` applies the LetterCase to a keystroke `text`:
 /// - LOWERCASED: lowercase per `TONE_CASE_KIND_LOWERCASE`
 /// - UPPERCASED: first letter upper (`TONE_CASE_KIND_UPPERCASE_FIRST`), rest lower
 /// - CAPS_LOCKED: full upper per `TONE_CASE_KIND_UPPERCASE_ALL`

@@ -32,14 +32,14 @@ make check          # from linux/: i18n check + native tests + clippy + cross bu
 
 Prerequisites on macOS: `brew install gtk4 libadwaita pkgconf`, `mise install` at the
 repository root for `zig` and `cargo-zigbuild`,
-`rustup target add x86_64-unknown-linux-gnu` (the toolchain file does it on
-first use). `zbus` and gtk4-rs both build natively on the Mac, so every crate
+`rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu` (the
+toolchain file does it on first use). `zbus` and gtk4-rs both build natively on the Mac, so every crate
 is clippy-checked here; `make check-target` cross-builds the engine binary
-for the shipping target through `cargo zigbuild`. These gates prove the code
+for both shipping targets (x86_64, aarch64) through `cargo zigbuild`. These gates prove the code
 compiles; they do not prove behaviour. The CI job
 (`.github/workflows/linux-build.yml`, nightly and on manual dispatch — not per
 pull request) adds a real Ubuntu build, the test run
-and an `ibus-daemon` smoke; the dogfood run-book in the roadmap owns the rest.
+and an `ibus-daemon` smoke; real-device dogfood owns the rest.
 
 ## System packages
 
@@ -70,10 +70,20 @@ sudo pacman -S --needed base-devel git cmake ninja extra-cmake-modules fcitx5 gt
 make build                       # cargo build --release
 sudo make install PREFIX=/usr    # both shells, their registration files, dictionaries, the settings launcher
 fcitx5 -r                        # and/or: ibus restart
-make deb                         # or: the .deb, from the same install layout (target/taigikeyboard_<version>_amd64.deb)
+make deb                         # or: the .deb, from the same install layout (target/taigikeyboard_<version>_<arch>.deb, the host architecture)
 ```
 
 Then add 台語齒盤 (language `nan`) in `fcitx5-configtool` (Fcitx5) or the desktop's input-source settings (IBus).
+
+On GNOME under Wayland, use IBus — GNOME's own framework. GNOME gives Fcitx5
+only window-relative caret coordinates from a Wayland app (the GTK module sets
+`RelativeRect`), and tells no other process where that window sits, so the
+candidate window cannot be placed under the caret: it lands over the text
+field. Fcitx5's own panel has the same limit; upstream's answer is the Kimpanel
+GNOME Shell extension, which draws Fcitx5's list instead of this candidate
+window. On an X11 session (the dogfood setup: KDE Plasma on X11) apps report
+screen coordinates, and Fcitx5 places the window under the caret.
+
 Packaged installs, per-distribution paths and where user data lives:
 [`../docs/INSTALL.md`](../docs/INSTALL.md) § Linux and
 [`../docs/architecture/linux-release.md`](../docs/architecture/linux-release.md).

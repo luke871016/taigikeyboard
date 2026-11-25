@@ -25,8 +25,6 @@ where
     assert_eq!(effect_kinds(effects), expected, "effect kinds (ordered)");
 }
 
-// ---- Enter ---------------------------------------------------------
-
 #[test]
 fn start_lands_in_continuous_with_nothing_nailed() {
     // R12: the first keystroke already composes in Continuous; there is no
@@ -52,8 +50,6 @@ fn start_lands_in_continuous_with_nothing_nailed() {
     }
 }
 
-// ---- Mid-commit ----------------------------------------------------
-
 #[test]
 fn mid_commit_pushes_segment_and_emits_ordered_effects() {
     let mut e = engine_in_continuous("tsua");
@@ -72,14 +68,8 @@ fn mid_commit_pushes_segment_and_emits_ordered_effects() {
 
     // Model B: mid-commit emits NO CommitTextReplacingPreedit — it only
     // re-renders the combined marked region (nailed prefix + new pending).
-    assert_kinds(
-        &resp.effect,
-        [
-            "UpdatePreedit",
-            "NextWordUpdateLastSelectedWord",
-            "RefreshCandidates",
-        ],
-    );
+    // No next-word handshake: a nail teaches nothing (§40).
+    assert_kinds(&resp.effect, ["UpdatePreedit", "RefreshCandidates"]);
 
     let state = e.snapshot_state();
     let Phase::Continuous { raw, nailed, .. } = state.phase else {
@@ -101,11 +91,6 @@ fn mid_commit_pushes_segment_and_emits_ordered_effects() {
         unreachable!();
     };
     assert_eq!(up.display, "珠a");
-    let Kind::NextWordUpdateLastSelectedWord(nw) = resp.effect[1].kind.as_ref().unwrap() else {
-        unreachable!();
-    };
-    assert_eq!(nw.text, "珠");
-    assert_eq!(nw.roman, "tsu");
 }
 
 #[test]
@@ -143,8 +128,6 @@ fn mid_commit_chains_raw_span_from_previous_segment() {
     assert_eq!(nailed[1].raw_span, (3, 4));
     assert_eq!(nailed[1].raw_text, "a");
 }
-
-// ---- Final commit --------------------------------------------------
 
 #[test]
 fn final_commit_exits_to_idle_emits_word_selected() {
@@ -233,8 +216,6 @@ fn final_commit_carries_nailed_segments_as_preceding() {
     assert_eq!(preceding, vec![("我", "guá"), ("欲", "beh")]);
 }
 
-// ---- CommitContinuous validation ----------------------------------
-
 #[test]
 fn commit_continuous_out_of_range_is_noop() {
     let mut e = engine_in_continuous("tsua");
@@ -319,8 +300,6 @@ fn commit_continuous_empty_display_is_noop() {
     assert!(resp.effect.is_empty());
 }
 
-// ---- Reset under Continuous ---------------------------------------
-
 #[test]
 fn reset_after_a_nail_discards_the_whole_composition() {
     // Model B (Codex risk (ii)): the nailed segment never reached the
@@ -365,8 +344,6 @@ fn reset_under_continuous_emits_the_abort_trio() {
     );
     assert_eq!(e.snapshot_state().phase, Phase::Idle);
 }
-
-// ---- Append / AppendHyphen under Continuous ---------
 
 #[test]
 fn append_under_continuous_extends_pending_only() {
@@ -431,8 +408,6 @@ fn append_hyphen_under_continuous_appends_dash() {
     assert_eq!(raw, "tsua-");
 }
 
-// ---- DeleteBackward (folded backspace) under Continuous -----------
-
 #[test]
 fn delete_backward_under_continuous_drops_pending_char() {
     let mut e = engine_in_continuous("tsua");
@@ -493,9 +468,9 @@ fn delete_backward_under_continuous_pops_nailed_when_pending_empty() {
 }
 
 #[test]
-fn delete_backward_pop_with_remaining_nailed_emits_nextword_update() {
-    // Two nailed segments → pop the latter → nextword's last_selected_word
-    // should now correct to the segment behind, not clear.
+fn delete_backward_pop_to_a_picked_segment_emits_no_nextword_effect() {
+    // Two nailed segments → pop the latter → the segment behind was picked,
+    // so NextWord hears nothing (not a clear).
     let mut e = engine_in_continuous("tsuagua");
     e.apply(
         Intent::CommitContinuous {
@@ -528,24 +503,10 @@ fn delete_backward_pop_with_remaining_nailed_emits_nextword_update() {
     e.apply(Intent::DeleteBackward, &config_tl()); // pending = ""
 
     // Model B: unnail "仔" — ZERO DeleteBackwardFromDocument. The remaining
-    // nailed "珠" makes the nextword correction an UpdateLastSelectedWord
-    // (not a clear), then UpdatePreedit(combined) + RefreshCandidates.
+    // nailed "珠" was picked, so NextWord hears nothing (not a clear): just
+    // UpdatePreedit(combined) + RefreshCandidates.
     let resp = e.apply(Intent::DeleteBackward, &config_tl());
-    assert_kinds(
-        &resp.effect,
-        [
-            "NextWordUpdateLastSelectedWord",
-            "UpdatePreedit",
-            "RefreshCandidates",
-        ],
-    );
-    // The NextWordUpdateLastSelectedWord payload should reflect "珠" / "tsu",
-    // the segment still nailed in the marked region.
-    let Kind::NextWordUpdateLastSelectedWord(nw) = resp.effect[0].kind.as_ref().unwrap() else {
-        unreachable!();
-    };
-    assert_eq!(nw.text, "珠");
-    assert_eq!(nw.roman, "tsu");
+    assert_kinds(&resp.effect, ["UpdatePreedit", "RefreshCandidates"]);
 
     let Phase::Continuous { raw, nailed, .. } = e.snapshot_state().phase else {
         panic!();
@@ -623,8 +584,6 @@ fn delete_backward_under_continuous_with_empty_state_exits_to_idle() {
     assert_eq!(e.snapshot_state().phase, Phase::Idle);
 }
 
-// ---- Snapshot under Continuous -----
-
 #[test]
 fn snapshot_under_continuous_raw_input_pending_only_display_text_whole_composition() {
     let mut e = engine_in_continuous("tsuagua");
@@ -651,7 +610,6 @@ fn snapshot_under_continuous_raw_input_pending_only_display_text_whole_compositi
     assert!(resp.is_composing);
 }
 
-// ---- Continuous-phase routing of legacy text-bearing Intents -----
 //
 // Per Codex post-impl finding #3, the two Intents that carry user text
 // (`Start`, `CommitPreeditThenInsertExternal`) under
@@ -1070,7 +1028,6 @@ fn commit_preedit_then_insert_external_under_continuous_with_empty_external_is_n
     assert!(matches!(e.snapshot_state().phase, Phase::Continuous { .. }));
 }
 
-// ---- Model B: text-bearing Intents with a NAILED prefix ----------
 // Codex post-impl P2: the zero-nailed cases above don't exercise the
 // Model-B "Σ nailed.display_text + …" combine. These pin §10.8 #9.
 
@@ -1201,8 +1158,6 @@ fn commit_raw_with_empty_tail_carries_earlier_nails_as_preceding() {
     assert_eq!(preceding, vec![("珠", "tsu")]);
 }
 
-// ---- Empty-Continuous invariant guards (Codex finding #2) --------
-
 #[test]
 fn empty_start_stays_idle() {
     // A composition is never empty in both pending and nailed: an empty
@@ -1218,8 +1173,6 @@ fn empty_start_stays_idle() {
     assert!(!resp.is_composing);
     assert_eq!(e.snapshot_state().phase, Phase::Idle);
 }
-
-// ---- NailedSegment public surface ------------------------------
 
 #[test]
 fn nailed_segment_public_fields_round_trip() {
@@ -1242,7 +1195,6 @@ fn nailed_segment_public_fields_round_trip() {
     assert!(seg.is_picked);
 }
 
-// ---- v3.5.8 Phase 9 Bug 1 (Option A) — swap-aware commit, Model B ----
 // `display_text` = swap/TPS/both-scripts marked-region string; `canonical_text`
 // = canonical key for NextWord. Empty canonical → falls back to display
 // (legacy callers). These pin: NailedSegment.display_text holds the swapped
@@ -1251,7 +1203,7 @@ fn nailed_segment_public_fields_round_trip() {
 // finalize's whole-composition write.
 
 #[test]
-fn bug1_mid_commit_marks_display_but_nextword_uses_canonical() {
+fn bug1_mid_commit_marks_display_and_nails_canonical() {
     let mut e = engine_in_continuous("tsua");
     let resp = e.apply(
         Intent::CommitContinuous {
@@ -1265,30 +1217,18 @@ fn bug1_mid_commit_marks_display_but_nextword_uses_canonical() {
         },
         &config_tl(),
     );
-    // Model B mid-commit: [UpdatePreedit(combined), NextWordUpdateLastSelectedWord,
-    // RefreshCandidates] — NO CommitTextReplacingPreedit.
-    assert_kinds(
-        &resp.effect,
-        [
-            "UpdatePreedit",
-            "NextWordUpdateLastSelectedWord",
-            "RefreshCandidates",
-        ],
-    );
+    // Model B mid-commit: [UpdatePreedit(combined), RefreshCandidates] — NO
+    // CommitTextReplacingPreedit, no next-word handshake.
+    assert_kinds(&resp.effect, ["UpdatePreedit", "RefreshCandidates"]);
     let Kind::UpdatePreedit(up) = resp.effect[0].kind.as_ref().unwrap() else {
         unreachable!();
     };
     // Combined = swapped "tāi-uân" + derived("a") = "tāi-uâna".
     assert_eq!(up.display, "tāi-uân a");
-    let Kind::NextWordUpdateLastSelectedWord(nw) = resp.effect[1].kind.as_ref().unwrap() else {
-        unreachable!();
-    };
-    assert_eq!(nw.text, "臺灣");
-    // R2: NextWord roman = the candidate's canonical TL (association_tl),
-    // NOT the raw typed slice "tsu". This is the write-side fix that keeps
-    // continuous-input `prev_tl`/`next_tl` aligned with a normal commit.
-    assert_eq!(nw.roman, "tâi-uân");
 
+    // The segment keeps the canonical key and, per R2, the canonical TL
+    // (not the raw typed slice "tsu") that the final commit's `preceding`
+    // hands NextWord, aligned with a normal commit's `prev_tl` / `next_tl`.
     let Phase::Continuous { nailed, .. } = e.snapshot_state().phase else {
         panic!("still Continuous");
     };
@@ -1328,10 +1268,10 @@ fn bug1_final_commit_documents_display_but_word_selected_uses_canonical() {
 }
 
 #[test]
-fn bug1_backspace_pop_correction_uses_canonical_no_document_delete() {
+fn bug1_backspace_pop_keeps_canonical_no_document_delete() {
     // seg0 multi-char swapped display. Model B: unnailing seg1 emits ZERO
     // DeleteBackwardFromDocument (nailed segments were never in the
-    // document); the NextWord correction still targets seg0's canonical.
+    // document) and no next-word handshake; seg0 keeps its canonical key.
     let mut e = engine_in_continuous("tsuagua");
     e.apply(
         Intent::CommitContinuous {
@@ -1363,24 +1303,17 @@ fn bug1_backspace_pop_correction_uses_canonical_no_document_delete() {
     e.apply(Intent::DeleteBackward, &config_tl());
 
     let resp = e.apply(Intent::DeleteBackward, &config_tl());
-    // Model B: unnail of seg1 — ZERO DeleteBackwardFromDocument, then the
-    // nextword correction (seg0 still nailed) + UpdatePreedit + autocomplete.
-    assert_kinds(
-        &resp.effect,
-        [
-            "NextWordUpdateLastSelectedWord",
-            "UpdatePreedit",
-            "RefreshCandidates",
-        ],
-    );
-    // Correction targets seg0 — canonical, not the swapped display string.
-    let Kind::NextWordUpdateLastSelectedWord(nw) = resp.effect[0].kind.as_ref().unwrap() else {
-        unreachable!();
+    // Model B: unnail of seg1 — ZERO DeleteBackwardFromDocument; seg0 was
+    // picked, so no next-word handshake: UpdatePreedit + autocomplete.
+    assert_kinds(&resp.effect, ["UpdatePreedit", "RefreshCandidates"]);
+    // seg0 keeps its canonical key and TL (R2), not the swapped display or
+    // the raw slice "tsu".
+    let Phase::Continuous { nailed, .. } = e.snapshot_state().phase else {
+        panic!("still Continuous");
     };
-    assert_eq!(nw.text, "臺灣");
-    // R2: the backspace correction re-establishes seg0's context with its
-    // canonical TL (association_tl), not the raw slice "tsu".
-    assert_eq!(nw.roman, "tâi-uân");
+    assert_eq!(nailed.len(), 1);
+    assert_eq!(nailed[0].canonical_text, "臺灣");
+    assert_eq!(nailed[0].association_tl, "tâi-uân");
     // Unnailing seg1 restores its raw_text "a" (consumed_bytes=1 from
     // pending "agua") as the new pending; combined = seg0 display "tāi-uân"
     // + derived("a") = "tāi-uâna".
@@ -1390,24 +1323,32 @@ fn bug1_backspace_pop_correction_uses_canonical_no_document_delete() {
 }
 
 #[test]
-fn bug1_empty_canonical_falls_back_to_display_text() {
-    // Backward-compat: legacy callers send no canonical_text → engine uses
-    // display_text for both document AND NextWord (pre-Bug-1 behavior).
+fn empty_canonical_roman_pick_is_ignored() {
+    // trace: `transition::commit_continuous` filters the script out when
+    // `canonical_text` is empty (no fallback to `roman`), so
+    // `resolve_commit_text` never runs → `commit_resolution(Ignored, None)`
+    // on a noop: no effects, the composition untouched.
     let mut e = engine_in_continuous("tsu");
     let resp = e.apply(
         Intent::CommitContinuous {
-            canonical_text: "珠".to_string(),
+            canonical_text: String::new(),
             association_tl: String::new(),
             hanji: None,
             consumed_bytes: 3,
             syllable_count: 1,
             script: Some(CommitScript::Roman),
-            roman: "珠".to_string(),
+            roman: "tsu".to_string(),
         },
         &config_tl(),
     );
-    let Kind::NextWordWordSelected(nw) = resp.effect[3].kind.as_ref().unwrap() else {
-        unreachable!();
-    };
-    assert_eq!(nw.text, "珠");
+    assert_eq!(
+        resp.commit.map(|commit| commit.outcome),
+        Some(CommitOutcome::Ignored as i32)
+    );
+    assert!(
+        resp.effect.is_empty(),
+        "got {:?}",
+        effect_kinds(&resp.effect)
+    );
+    assert!(resp.is_composing, "the composition is untouched");
 }

@@ -28,25 +28,20 @@ use crate::api::{
     CaretDirection, CommitScript, ComposingError, ContinuousPick, Engine, Intent,
     ListedAbbreviations, Phase, UserRows,
 };
-use crate::continuous::{
-    assemble_candidates, is_one_syllable_prefix_pick, retain_first_by_key, Assembled, ListShape,
-};
+use crate::continuous::{assemble_candidates, retain_first_by_key, Assembled, ListShape};
 use crate::derived::buffer_input_mode;
 use crate::WordListStart;
 use lexicon::dictionary_reader::NO_ROWID;
 use lexicon::{
-    classification::is_hanji, ConsumedSpan, LearnedEntry, RawCandidate, SyllableInventory,
-    COVERAGE_KIND_ABBREV, COVERAGE_KIND_FULL, COVERAGE_KIND_PARTIAL_PREFIX,
+    ConsumedSpan, LearnedEntry, RawCandidate, SyllableInventory, COVERAGE_KIND_ABBREV,
+    COVERAGE_KIND_FULL,
 };
-use phonetics::api::roman_reading_eq;
+use phonetics::api::{is_hanji, roman_reading_eq};
 use protos::engine::{
     composing_request, AppConfig, CandidateMessage, CellScript, CommitScript as WireCommitScript,
     ComposingRequest, ComposingResponse, ContinuousResponse, FetchAtPos,
 };
-use ranking::{
-    source_tier_rank, CandidateSortKey, CONTEXT_RANK_BUNDLED, CONTEXT_RANK_USER,
-    WALKER_COST_UNPRICED,
-};
+use ranking::WALKER_COST_UNPRICED;
 
 /// Decode the proto request into a typed `Intent`. Returns `MissingMethod`
 /// when `oneof method` is empty.
@@ -258,16 +253,38 @@ fn handle_fetch_at_pos(
             .collect();
         ListedAbbreviations::new(basis, rows)
     });
+    let roman_twins = listed.roman_twins;
     let candidates: Vec<CandidateMessage> = listed
         .candidates
         .into_iter()
         .map(|candidate| raw_to_proto_candidate(candidate, config))
         .collect();
     let candidates = if config.splits_single_script_cells() {
+        // With roman twins a Hanji row whose reading's roman-only row made the
+        // list draws no roman cell: that row is the cell, with the
+        // romanization's own identity. One whose twin is not listed (the
+        // whole-sentence row, a row past the partial-prefix cap) keeps its own.
+        let listed_romanizations: std::collections::HashSet<String> = if roman_twins {
+            candidates
+                .iter()
+                .filter(|c| c.hanji.as_deref().is_none_or(str::is_empty))
+                .map(|c| c.roman.clone())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         protos::split_single_script_cells(
             candidates,
             |c| c.hanji.as_deref().unwrap_or_default(),
-            |c| &c.roman,
+            |c| {
+                if c.hanji.as_deref().is_some_and(|h| !h.is_empty())
+                    && listed_romanizations.contains(&c.roman)
+                {
+                    ""
+                } else {
+                    &c.roman
+                }
+            },
             |c, script| c.set_cell_script(script),
         )
     } else {
@@ -279,100 +296,52 @@ fn handle_fetch_at_pos(
     )
 }
 
-/// The open composition's cut and candidate order, for a shell that shows
-/// the mechanism. `None` when nothing is being composed. The candidate rows
-/// are [`listed_candidates`]: the same list the fetch sends.
-pub fn mechanism(
-    engine: &Engine,
-    now_ms: i64,
-    user_rows: &UserRows,
-    context: &ranking::ContextRanks,
-    literal_roman_candidate_disabled: bool,
-    config: &AppConfig,
-) -> Option<crate::explain::Mechanism> {
-    let listed = listed_candidates(
-        engine,
-        now_ms,
-        user_rows,
-        context,
-        literal_roman_candidate_disabled,
-        config,
-    )?;
-    let mut segmentation = if listed.blocked {
-        crate::continuous::Segmentation::default()
-    } else {
-        crate::continuous::explain_segmentation(
-            &listed.segment_raw,
-            &user_rows.frequency,
-            now_ms,
-            &user_rows.custom,
-            &listed.learned,
-            listed.mode,
-            context,
-            config,
-        )
-    };
-    if listed.shift > 0 {
-        if let Some(prefix) = listed.raw.get(..listed.shift as usize) {
-            if !prefix.is_empty() {
-                segmentation.syllables.insert(
-                    0,
-                    crate::continuous::BufferCut {
-                        text: prefix.to_owned(),
-                        gap: true,
-                    },
-                );
-                segmentation.words.insert(
-                    0,
-                    crate::continuous::WordCut {
-                        text: prefix.to_owned(),
-                        hanji: None,
-                        roman: String::new(),
-                        kind: "gap",
-                        user_row: false,
-                        picks: 0,
-                        weight: 0.0,
-                        khinsiann_before: false,
-                    },
-                );
-            }
-        }
-    }
-    Some(explain_mechanism(
-        &listed,
-        &segmentation,
-        &user_rows.frequency,
-        config,
-    ))
-}
-
-struct Listed {
+pub(crate) struct Listed {
     /// The string the shifted spans index.
-    raw: String,
+    pub(crate) raw: String,
     /// The string the walk and the syllable grid were built on.
-    segment_raw: String,
-    shift: u32,
-    mode: phonetics::InputMode,
-    learned: Vec<LearnedEntry>,
-    candidates: Vec<RawCandidate>,
-    literal_at: Option<usize>,
+    pub(crate) segment_raw: String,
+    pub(crate) shift: u32,
+    pub(crate) mode: phonetics::InputMode,
+    /// The fetch's keys and slot-0 cut (`Assembled::keys` / `synth`), for the
+    /// explain view.
+    pub(crate) keys: Option<crate::shadow::ContinuousKeys>,
+    pub(crate) synth: Option<crate::continuous::SynthCut>,
+    pub(crate) candidates: Vec<RawCandidate>,
+    pub(crate) literal_at: Option<usize>,
     /// The Step 4d post-pass moved the one-word walker path ahead of
     /// one-syllable prefix picks (`continuous::assemble`).
-    walker_moved: bool,
+    pub(crate) walker_moved: bool,
+    /// Every reading has its own roman-only row (`continuous::han_lo`), so
+    /// the §42 split draws Hanji rows as Hanji cells only.
+    pub(crate) roman_twins: bool,
     /// Hanji leaked into the buffer: an empty list, no cut.
-    blocked: bool,
+    pub(crate) blocked: bool,
 }
 
-/// The candidate list [`handle_fetch_at_pos`] encodes, plus the buffer it
-/// was built from. `None` when the engine is not composing.
-fn listed_candidates(
-    engine: &Engine,
-    now_ms: i64,
-    user_rows: &UserRows,
-    context: &ranking::ContextRanks,
-    literal_roman_candidate_disabled: bool,
-    config: &AppConfig,
-) -> Option<Listed> {
+/// Whether this fetch lists Hàn-Lô lām romanization rows
+/// (`AppConfig::lists_roman_twins`): only a TL / POJ buffer, so a TPS-glyph
+/// buffer typed on a roman layout never offers one.
+pub(crate) fn lists_roman_twins(config: &AppConfig, mode: phonetics::InputMode) -> bool {
+    config.lists_roman_twins()
+        && matches!(mode, phonetics::InputMode::Tl | phonetics::InputMode::Poj)
+}
+
+/// The buffer a fetch of `engine` lists from now — the pending tail, or the
+/// stretch a word list starts at — and how it is read. `None` when the
+/// engine is not composing.
+struct ListingBuffer {
+    /// The whole pending tail.
+    tail: String,
+    /// The listed buffer.
+    listed: String,
+    /// Where `listed` starts in `tail` (`0` for the last nailed segment's list).
+    list_start: usize,
+    shape: ListShape,
+    mode: phonetics::InputMode,
+}
+
+fn listing_buffer(engine: &Engine, config: &AppConfig) -> Option<ListingBuffer> {
     let state = engine.snapshot_state();
     let Phase::Continuous {
         raw: tail, nailed, ..
@@ -388,27 +357,6 @@ fn listed_candidates(
     let (listed, list_start) = word_list_start
         .unwrap_or(WordListStart::InTail(0))
         .listed(nailed, tail);
-    let raw = listed.as_str();
-    // v3.5.8 Phase 9 Item 11 — hanji guard (§15.3.E). The only input
-    // modes are TL/POJ/TPS romanization; CJK never legitimately enters
-    // the composing buffer. When it leaks in (paste, stale selection
-    // residue) short-circuit to an empty candidate carrier instead of
-    // letting the syllabifier / lexicon scan garbage. Ports the platform
-    // D-8 guard (`LexiconService` Hanji classification) into the engine
-    // so the behavior survives the Item 13 platform-fallback retire.
-    if is_hanji(raw) {
-        return Some(Listed {
-            raw: raw.to_owned(),
-            segment_raw: String::new(),
-            shift: 0,
-            mode: phonetics::InputMode::Tl,
-            learned: Vec::new(),
-            candidates: Vec::new(),
-            literal_at: None,
-            walker_moved: false,
-            blocked: true,
-        });
-    }
     // v3.5.9 D / C-3b — mode upgrade: the buffer's content, not the
     // config, decides TPS. Any Bopomofo char (`phonetics::contains_tps`,
     // the same detection `derived::derived_display` uses) makes the fetch
@@ -427,12 +375,156 @@ fn listed_candidates(
     // segment's list reads that segment too (the tail after a pick may be
     // empty or tone marks only).
     let mode = match word_list_start {
-        Some(WordListStart::LastNailed) => buffer_input_mode(raw, config),
+        Some(WordListStart::LastNailed) => buffer_input_mode(&listed, config),
         _ => buffer_input_mode(tail, config),
     };
+    Some(ListingBuffer {
+        tail: tail.clone(),
+        listed,
+        list_start,
+        shape,
+        mode,
+    })
+}
+
+/// The toneless body of every edge of the sentence walk a fetch of `engine`
+/// makes now, and the mode they are keyed in — what the dispatch layer reads
+/// the custom words and learned phrases filed inside the buffer with
+/// (`UserRows::edge_custom` / `edge_learned`), so `m̄知影` meets its edge in
+/// `guamtsaiiann`. `None` when not composing, or for a buffer the fetch
+/// blocks (Hanji leaked in).
+pub fn walker_edge_keys(
+    engine: &Engine,
+    config: &AppConfig,
+) -> Option<(Vec<String>, phonetics::InputMode)> {
+    let ListingBuffer { listed, mode, .. } = listing_buffer(engine, config)?;
+    if listed.is_empty() || is_hanji(&listed) {
+        return None;
+    }
+    lexicon::EngineHandle::with_state(|state| {
+        Ok(state.syllable_inventory.as_ref().map(|inv| {
+            let keys = crate::shadow::build_continuous_keys(&listed, inv, mode);
+            crate::continuous::edge_toneless_bodies(&keys, mode)
+        }))
+    })
+    .ok()
+    .flatten()
+    .map(|bodies| (bodies, mode))
+}
+
+/// Every word the sentence walk of a fetch of `engine` could write on any of
+/// its edges — the dictionary's homophones (under Hàn-Lô lām each reading's
+/// romanization too) and the words of `user_rows`' custom entries and learned
+/// phrases, the inner edges' included — deduplicated: the words whose user
+/// counts can change the sentence, which the dispatch layer reads before the
+/// fetch it ranks with (a picked `tsia̍h` inside `guatsiah`, a picked 予
+/// inside `uhootsinghu`). Empty when not composing.
+pub fn walker_edge_words(engine: &Engine, user_rows: &UserRows, config: &AppConfig) -> Vec<String> {
+    let Some(ListingBuffer { listed, mode, .. }) = listing_buffer(engine, config) else {
+        return Vec::new();
+    };
+    if listed.is_empty() || is_hanji(&listed) {
+        return Vec::new();
+    }
+    let custom: Vec<lexicon::CustomEntry> = user_rows
+        .custom
+        .iter()
+        .chain(&user_rows.edge_custom)
+        .cloned()
+        .collect();
+    let roman_twins = lists_roman_twins(config, mode);
+    let learned: Vec<LearnedEntry> = first_learned_per_reading(
+        &user_rows
+            .learned
+            .iter()
+            .chain(&user_rows.edge_learned)
+            .cloned()
+            .collect::<Vec<_>>(),
+        roman_twins,
+    );
+    let mut words = lexicon::EngineHandle::with_state(|state| {
+        let (Some(inv), Some(prefix_index), Some(dict)) = (
+            state.syllable_inventory.as_ref(),
+            state.prefix_index.as_ref(),
+            state.dictionary.as_ref(),
+        ) else {
+            return Ok(Vec::new());
+        };
+        let keys = crate::shadow::build_continuous_keys(&listed, inv, mode);
+        let ctx = lexicon::ContinuousFetchCtx {
+            enabled_sources_bitmask: source_filter_bitmask(config),
+            freq_map: &ranking::FrequencyMap::new(),
+            now_ms: 0,
+            context: ranking::ContextRanks::empty(),
+            custom: &custom,
+            learned: &learned,
+            prefix_index,
+            dict,
+            mode,
+            tone_pin: crate::shadow::whole_buffer_tone_pin(&listed, mode, Some(inv)),
+            whole_buffer_key: None,
+            khinsiann_in_hanji: config.khinsiann_in_hanji,
+            roman_twins,
+        };
+        Ok(crate::continuous::edge_homophone_words(&keys, &ctx))
+    })
+    .unwrap_or_default();
+    let mut seen: std::collections::HashSet<String> = words.iter().cloned().collect();
+    let user_words = custom
+        .iter()
+        .map(|entry| entry.word(mode))
+        .chain(learned.iter().map(|entry| entry.hanji.clone()));
+    words.extend(user_words.filter(|word| seen.insert(word.clone())));
+    words
+}
+
+/// The candidate list [`handle_fetch_at_pos`] encodes, plus the buffer it
+/// was built from. `None` when the engine is not composing.
+pub(crate) fn listed_candidates(
+    engine: &Engine,
+    now_ms: i64,
+    user_rows: &UserRows,
+    context: &ranking::ContextRanks,
+    literal_roman_candidate_disabled: bool,
+    config: &AppConfig,
+) -> Option<Listed> {
+    let ListingBuffer {
+        tail,
+        listed,
+        list_start,
+        shape,
+        mode,
+    } = listing_buffer(engine, config)?;
+    let raw = listed.as_str();
+    // v3.5.8 Phase 9 Item 11 — hanji guard (§15.3.E). The only input
+    // modes are TL/POJ/TPS romanization; CJK never legitimately enters
+    // the composing buffer. When it leaks in (paste, stale selection
+    // residue) short-circuit to an empty candidate carrier instead of
+    // letting the syllabifier / lexicon scan garbage. Ports the platform
+    // D-8 guard (`LexiconService` Hanji classification) into the engine
+    // so the behavior survives the Item 13 platform-fallback retire.
+    if is_hanji(raw) {
+        return Some(Listed {
+            raw: raw.to_owned(),
+            segment_raw: String::new(),
+            shift: 0,
+            mode: phonetics::InputMode::Tl,
+            keys: None,
+            synth: None,
+            candidates: Vec::new(),
+            literal_at: None,
+            walker_moved: false,
+            roman_twins: false,
+            blocked: true,
+        });
+    }
     // Learned phrases (§50): one row per reading, the most-learned
     // separator form first.
-    let learned = first_learned_per_reading(&user_rows.learned);
+    // Hàn-Lô lām: the lexicon gives every reading its romanization-only row,
+    // and a phrase learned with a word written in romanization is in effect
+    // only while it does.
+    let roman_twins = lists_roman_twins(config, mode);
+    let learned = first_learned_per_reading(&user_rows.learned, roman_twins);
     // v3.5.9 A2 seam — the 6-step assemble_candidates contract
     // (key build → span-local/partial fetch → recase → walker slot-0
     // prepend → POJ presentation pass → return). Wire encoding (step 6)
@@ -443,12 +535,18 @@ fn listed_candidates(
     let Assembled {
         mut candidates,
         walker_moved,
+        keys,
+        synth,
     } = assemble_candidates(
         raw,
         &user_rows.frequency,
         now_ms,
         &user_rows.custom,
         &learned,
+        (
+            &user_rows.edge_custom,
+            &first_learned_per_reading(&user_rows.edge_learned, roman_twins),
+        ),
         mode,
         context,
         config,
@@ -479,10 +577,10 @@ fn listed_candidates(
             // so the literal is not duplicated; dict rows with hanji stay (a
             // `tâi`/台 dict candidate and a bare `tâi` commit differ — Codex
             // pre-impl F5).
-            candidates.retain(|c| !(c.hanji.is_none() && c.roman == literal.roman));
-            if config.is_single_script_display() {
-                adopt_collapsed_dict_identity(&mut literal, &candidates);
+            if roman_twins || config.is_single_script_display() {
+                adopt_collapsed_dict_identity(&mut literal, &candidates, roman_twins);
             }
+            candidates.retain(|c| !(c.hanji.is_none() && c.roman == literal.roman));
             candidates.insert(0, literal);
             literal_at = Some(0);
         }
@@ -511,207 +609,19 @@ fn listed_candidates(
         segment_raw: listed,
         shift,
         mode,
-        learned,
+        keys,
+        synth,
         candidates,
         literal_at,
         walker_moved,
+        roman_twins,
         blocked: false,
     })
 }
 
-fn explain_mechanism(
-    listed: &Listed,
-    segmentation: &crate::continuous::Segmentation,
-    frequency: &ranking::FrequencyMap,
-    config: &AppConfig,
-) -> crate::explain::Mechanism {
-    use crate::explain::{CandidatePiece, WordPiece};
-    let sentence = sentence_hanji(&segmentation.words, config.khinsiann_in_hanji);
-    // One word is still the walker's path, but it is ranked with the rest
-    // (`continuous::assemble` Step 4), so it is an ordinary row: tagging it
-    // `sentence` would pull it back out of the twelve stages. A path of
-    // several words stays a sentence, and so does a one-word path the Step 4d
-    // post-pass moved ahead of one-syllable prefix picks — no sort field
-    // placed it, so it reads `path_over_prefix_pick` and the picks it passed
-    // `behind_path`.
-    let one_word = segmentation
-        .words
-        .iter()
-        .filter(|word| word.kind != "gap")
-        .count()
-        <= 1;
-    let raw_len = listed.raw.len() as u32;
-    let is_sentence = |candidate: &RawCandidate| {
-        sentence
-            .as_ref()
-            .is_some_and(|hanji| candidate.hanji.as_deref() == Some(hanji))
-    };
-    let path_moved = one_word && listed.walker_moved;
-    let sentence_at = if path_moved {
-        listed
-            .candidates
-            .iter()
-            .position(|candidate| is_sentence(candidate) && candidate.consumed_span.1 == raw_len)
-    } else if one_word {
-        None
-    } else {
-        listed.candidates.iter().position(is_sentence)
-    };
-    let mut previous: Option<CandidateSortKey> = None;
-    let mut behind_path = false;
-    let pieces: Vec<CandidatePiece> = listed
-        .candidates
-        .iter()
-        .enumerate()
-        .map(|(index, candidate)| {
-            let role = if listed.literal_at == Some(index) {
-                "literal"
-            } else if sentence_at == Some(index) {
-                "sentence"
-            } else {
-                "word"
-            };
-            behind_path = if role == "sentence" {
-                path_moved
-            } else {
-                behind_path && is_one_syllable_prefix_pick(candidate)
-            };
-            let key = CandidateSortKey::new(&candidate.rank_facts(), raw_len, index as u32);
-            let placed_by = match role {
-                "literal" => "literal",
-                "sentence" if path_moved => "path_over_prefix_pick",
-                "sentence" if previous.is_some() => "sentence_after",
-                "sentence" => "sentence",
-                _ if behind_path => "behind_path",
-                _ if !path_moved
-                    && sentence_at.is_some_and(|at| at > index)
-                    && previous.is_none() =>
-                {
-                    "picked_over_sentence"
-                }
-                _ => previous
-                    .as_ref()
-                    .map_or("lead", |ahead| ahead.deciding_field(&key)),
-            };
-            if role == "word" {
-                previous = Some(key);
-            }
-            let (start, end) = candidate.consumed_span;
-            let lookup_key = phonetics::api::learning_hanji_key(&candidate.display_text);
-            let picks = frequency.get(&lookup_key, &candidate.canonical_tl);
-            CandidatePiece {
-                hanji: candidate.hanji.clone(),
-                roman: candidate.roman.clone(),
-                before: slice_raw(&listed.raw, 0, start),
-                head: slice_raw(&listed.raw, start, end),
-                rest: slice_raw(&listed.raw, end, raw_len),
-                role,
-                placed_by,
-                preference: if candidate.user_weight > 0.0 {
-                    "picked"
-                } else if candidate.is_custom {
-                    "custom"
-                } else {
-                    "rest"
-                },
-                coverage: match candidate.coverage_kind {
-                    COVERAGE_KIND_PARTIAL_PREFIX => "prefix",
-                    COVERAGE_KIND_ABBREV => "abbreviation",
-                    _ => "full",
-                },
-                context: match candidate.context_rank {
-                    CONTEXT_RANK_USER => "learned",
-                    CONTEXT_RANK_BUNDLED => "bundled",
-                    _ => "none",
-                },
-                picks: picks.count,
-                syllables: candidate.syllable_count,
-                weight: candidate.user_weight,
-                last_used_ms: picks.last_used_ms,
-                tier: if end == raw_len { "whole" } else { "front" },
-                score: if candidate.score.is_finite() {
-                    candidate.score
-                } else {
-                    0.0
-                },
-                frequency: candidate.frequency,
-                walker_cost: (candidate.walker_cost != WALKER_COST_UNPRICED)
-                    .then_some(candidate.walker_cost),
-                coverage_bytes: end.saturating_sub(start),
-                source_rank: source_tier_rank(candidate.bitmask, candidate.is_custom),
-                sources: crate::explain::source_ids(candidate.bitmask, candidate.is_custom),
-                ranking_source: crate::explain::ranking_source(
-                    candidate.bitmask,
-                    candidate.is_custom,
-                ),
-            }
-        })
-        .collect();
-    crate::explain::Mechanism {
-        raw: listed.raw.clone(),
-        cut_by: if listed.blocked {
-            "none"
-        } else {
-            segmentation.cut_by
-        },
-        syllables: segmentation
-            .syllables
-            .iter()
-            .map(|cut| crate::explain::BufferPiece {
-                text: cut.text.clone(),
-                gap: cut.gap,
-            })
-            .collect(),
-        words: segmentation
-            .words
-            .iter()
-            .map(|word| WordPiece {
-                text: word.text.clone(),
-                hanji: word.hanji.clone(),
-                roman: word.roman.clone(),
-                kind: word.kind,
-                user_row: word.user_row,
-                picks: word.picks,
-                weight: word.weight,
-            })
-            .collect(),
-        candidates: pieces,
-    }
-}
-
-/// Hanji of the walker's whole-buffer path, including a path of one word.
-/// That row is inserted at slot 0 before the twelve stages, so the inspector
-/// keeps it out of the scored list. A path with a hanji-less edge has no
-/// single string to match.
-fn sentence_hanji(
-    words: &[crate::continuous::WordCut],
-    khinsiann_in_hanji: bool,
-) -> Option<String> {
-    let words: Vec<_> = words.iter().filter(|word| word.kind != "gap").collect();
-    if words.is_empty() || words.iter().any(|word| word.hanji.is_none()) {
-        return None;
-    }
-    let mut out = String::new();
-    for (idx, word) in words.iter().enumerate() {
-        let h = word.hanji.as_deref()?;
-        phonetics::api::push_hanji_with_interword_khinsiann(
-            &mut out,
-            h,
-            idx > 0 && khinsiann_in_hanji && word.khinsiann_before,
-        );
-    }
-    Some(out)
-}
-
-fn slice_raw(raw: &str, start: u32, end: u32) -> String {
-    raw.get(start as usize..end as usize)
-        .unwrap_or("")
-        .to_owned()
-}
-
 /// Romanization Only display dedupe (§44) — key = the **rendered roman alone**,
 /// first-seen wins (top-ranked sorted row, or the §34 literal when it is in
-/// the group). Mirror of `continuous::dedupe_display_hanji_for_tps` for the
+/// the group). Mirror of `continuous::dedupe_same_commit_hanji` for the
 /// other script; keys on the roman the user actually sees — the POJ
 /// presentation pass already ran.
 ///
@@ -739,10 +649,19 @@ fn dedupe_display_roman(candidates: &mut Vec<RawCandidate>) {
 /// dictionary word joins a compound run with the nailed prefix
 /// (`nailed::nailed_prefix`, `台` + literal `gí` → `tâi-gí`), exactly as the
 /// absorbed dictionary cell would have.
-fn adopt_collapsed_dict_identity(literal: &mut RawCandidate, candidates: &[RawCandidate]) {
+///
+/// With Hàn-Lô lām (`roman_twins`) — under any display it applies to — the
+/// Hanji rows keep their own cells and the literal absorbs the reading's
+/// romanization-only row instead, so it learns the romanization, never a
+/// Hanji word.
+fn adopt_collapsed_dict_identity(
+    literal: &mut RawCandidate,
+    candidates: &[RawCandidate],
+    roman_twins: bool,
+) {
     let Some(absorbed) = candidates
         .iter()
-        .find(|c| c.hanji.is_some() && c.roman == literal.roman)
+        .find(|c| c.hanji.is_some() != roman_twins && c.roman == literal.roman)
     else {
         return;
     };
@@ -814,7 +733,7 @@ fn literal_roman_candidate(
 /// Inventory-injected hermetic test seam for continuous-input key
 /// building: the same [`crate::shadow::build_continuous_keys`] that
 /// [`crate::continuous::assemble_candidates`] runs (barriers and typed
-/// hyphen runs included), so the `engine/composing/tests/build_keys_*.rs`
+/// hyphen runs included), so the `engine/composing/tests/continuous_keys_*.rs`
 /// integration tests pin production keys against a hermetic inventory
 /// without installing the global `LexiconHandle` singleton. Public
 /// (`#[doc(hidden)]`) for the test crate boundary; production callers
@@ -840,11 +759,18 @@ pub fn build_continuous_keys_with_inventory(
 /// order (`learn_count DESC, updated_at DESC` — the form the user composed
 /// most, then most recently) is kept, so a corrected separator wins over the
 /// slip and one slip never displaces a settled phrase.
-fn first_learned_per_reading(entries: &[LearnedEntry]) -> Vec<LearnedEntry> {
+///
+/// Without Hàn-Lô lām in effect (`roman_twins` false: the switch off, a
+/// display or buffer it does not apply to) a phrase writing a word in
+/// romanization — one only the switch could have taught
+/// ([`writes_a_word_in_romanization`]) — is left out: it waits in the store
+/// for the switch to come back on.
+fn first_learned_per_reading(entries: &[LearnedEntry], roman_twins: bool) -> Vec<LearnedEntry> {
     let mut out: Vec<LearnedEntry> = Vec::with_capacity(entries.len());
     for e in entries
         .iter()
         .filter(|e| !e.hanji.is_empty() && !e.canonical_tl.is_empty())
+        .filter(|e| roman_twins || !writes_a_word_in_romanization(e))
     {
         let same_reading = out.iter().any(|kept| {
             kept.hanji == e.hanji && roman_reading_eq(&kept.canonical_tl, &e.canonical_tl)
@@ -854,6 +780,34 @@ fn first_learned_per_reading(entries: &[LearnedEntry]) -> Vec<LearnedEntry> {
         }
     }
     out
+}
+
+/// Whether a learned phrase writes one of its words wholly in romanization
+/// (`我tsia̍h`, `記khí-lâi`, `我tsia̍h--ah`) — what only a Hàn-Lô lām
+/// composition learns (§50: a hanji-less pick learns nothing otherwise). A
+/// dictionary Han-Lo word keeps a Hanji syllable (`啥mih` / `siánn-mih`), so a
+/// phrase holding one is not. Words are the reading's runs between a space or
+/// a khinsiann `--`; a phrase whose Hanji does not align syllable by syllable
+/// with its reading is taken as not.
+pub(crate) fn writes_a_word_in_romanization(entry: &LearnedEntry) -> bool {
+    let Some((hanji, _, readings)) =
+        phonetics::api::align_hanji_syllables(&entry.hanji, &entry.canonical_tl)
+    else {
+        return false;
+    };
+    let mut word_is_romanized = false;
+    for (index, (token, reading)) in hanji.iter().zip(&readings).enumerate() {
+        let opens_word =
+            index == 0 || reading.leading_sep.contains(' ') || reading.leading_sep.contains("--");
+        if opens_word {
+            if index > 0 && word_is_romanized {
+                return true;
+            }
+            word_is_romanized = true;
+        }
+        word_is_romanized &= token.kind == phonetics::api::HanjiTokenKind::Roman;
+    }
+    word_is_romanized
 }
 
 fn raw_to_proto_candidate(c: RawCandidate, config: &AppConfig) -> CandidateMessage {
@@ -939,6 +893,35 @@ mod tests {
     //! the `Engine` + lexicon singletons.
 
     use super::*;
+
+    #[test]
+    fn a_phrase_writing_a_word_in_romanization_is_told_from_a_han_lo_word() {
+        let phrase = |hanji: &str, canonical_tl: &str| LearnedEntry {
+            hanji: hanji.into(),
+            canonical_tl: canonical_tl.into(),
+        };
+        for (hanji, tl) in [
+            ("我tsia̍h", "guá tsia̍h"),
+            ("記khí-lâi", "kì khí-lâi"),
+            ("記khí lâi", "kì khí-lâi"),
+            ("記--khí-lâi", "kì--khí-lâi"),
+            ("我tsia̍h--ah", "guá tsia̍h--ah"),
+            ("m̄知影", "m̄ tsai-iánn"),
+        ] {
+            assert!(writes_a_word_in_romanization(&phrase(hanji, tl)), "{hanji}");
+        }
+        // A dictionary Han-Lo word keeps a Hanji syllable; Hanji alone.
+        for (hanji, tl) in [
+            ("我啥mih", "guá siánn-mih"),
+            ("記起來", "kì khí-lâi"),
+            ("好矣", "hó--ah"),
+        ] {
+            assert!(
+                !writes_a_word_in_romanization(&phrase(hanji, tl)),
+                "{hanji}"
+            );
+        }
+    }
 
     /// A ranked row reading `roman` (+ `hanji`) over `span`; every other field defaulted.
     fn row(roman: &str, hanji: Option<&str>, span: (u32, u32)) -> RawCandidate {
@@ -1078,7 +1061,7 @@ mod tests {
         );
     }
 
-    // ----- INVARIANT_CONTINUOUS_LITERAL_ROMAN_CANDIDATE (§34) -----
+    // INVARIANT_CONTINUOUS_LITERAL_ROMAN_CANDIDATE (§34).
     // Hanji-romanization fast input: TL/POJ + written tone → roman-only literal candidate
     // (= preedit WYSIWYG) injected at index 0. Tests assert the GATE +
     // self-consistency; the literal string is asserted against
@@ -1102,6 +1085,7 @@ mod tests {
             c_types_affricate: false,
             f_types_hyphen: false,
             khinsiann_in_hanji: false,
+            han_lo_mixed: false,
         }
     }
 

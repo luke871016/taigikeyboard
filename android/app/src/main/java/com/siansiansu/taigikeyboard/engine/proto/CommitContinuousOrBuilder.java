@@ -53,7 +53,7 @@ public interface CommitContinuousOrBuilder extends
    * v3.6.1 R2 — canonical TL romanization of the committed candidate
    * (`CandidateMessage.canonical_tl`, snapshotted BEFORE the POJ-render /
    * recase passes rewrite `roman`). Becomes the `roman` arg of the
-   * NextWord `WordSelected` / `UpdateLastSelectedWord` effects so the
+   * NextWord `WordSelected` effect so the
    * learned association `prev_tl` / `next_tl` is the same canonical TL a
    * normal (non-continuous) candidate commit records — fixing the
    * continuous-vs-normal `next_tl` fragmentation (raw typed slice
@@ -61,7 +61,7 @@ public interface CommitContinuousOrBuilder extends
    * methods, TPS-OOV hanji-absent candidates with no dict
    * TL) decodes as "" → engine falls back to the raw committed slice
    * (`pending[..consumed_bytes]`), preserving pre-R2 behavior. Identity
-   * is the `(hanji, canonical-TL)` pair (Core Principle #7), so this is
+   * is the `(hanji, canonical-TL)` pair (Core Principle #6), so this is
    * populated for hanji-present candidates too, NOT only hanji-absent.
    * </pre>
    *
@@ -74,7 +74,7 @@ public interface CommitContinuousOrBuilder extends
    * v3.6.1 R2 — canonical TL romanization of the committed candidate
    * (`CandidateMessage.canonical_tl`, snapshotted BEFORE the POJ-render /
    * recase passes rewrite `roman`). Becomes the `roman` arg of the
-   * NextWord `WordSelected` / `UpdateLastSelectedWord` effects so the
+   * NextWord `WordSelected` effect so the
    * learned association `prev_tl` / `next_tl` is the same canonical TL a
    * normal (non-continuous) candidate commit records — fixing the
    * continuous-vs-normal `next_tl` fragmentation (raw typed slice
@@ -82,7 +82,7 @@ public interface CommitContinuousOrBuilder extends
    * methods, TPS-OOV hanji-absent candidates with no dict
    * TL) decodes as "" → engine falls back to the raw committed slice
    * (`pending[..consumed_bytes]`), preserving pre-R2 behavior. Identity
-   * is the `(hanji, canonical-TL)` pair (Core Principle #7), so this is
+   * is the `(hanji, canonical-TL)` pair (Core Principle #6), so this is
    * populated for hanji-present candidates too, NOT only hanji-absent.
    * </pre>
    *
@@ -100,8 +100,11 @@ public interface CommitContinuousOrBuilder extends
    * presence marks a Hanji pick (§50 learned phrases); the phrase and the
    * usage store `canonical_text`, the stored spelling, since POJ mode shows
    * a Han-Lo word's romanization in POJ. Wire-absent for a hanji-less pick
-   * (§34 literal, OOV synth, roman-only custom row); a composition with any
-   * hanji-less segment is never learned. proto3 `optional` so absent ≠ empty
+   * (§34 literal, OOV synth, roman-only custom row, a Hàn-Lô lām
+   * romanization); a composition with a hanji-less segment is never learned,
+   * except under Hàn-Lô lām, where a hanji-less segment whose reading is a
+   * dictionary word stands in the phrase as its romanization (§50) and the
+   * phrase still needs one Hanji segment. proto3 `optional` so absent ≠ empty
    * (Codex 2026-09-20 F2: whether a pick has Hanji is an explicit
    * sidechannel, never inferred from `canonical_text` vs `association_tl`).
    * </pre>
@@ -118,8 +121,11 @@ public interface CommitContinuousOrBuilder extends
    * presence marks a Hanji pick (§50 learned phrases); the phrase and the
    * usage store `canonical_text`, the stored spelling, since POJ mode shows
    * a Han-Lo word's romanization in POJ. Wire-absent for a hanji-less pick
-   * (§34 literal, OOV synth, roman-only custom row); a composition with any
-   * hanji-less segment is never learned. proto3 `optional` so absent ≠ empty
+   * (§34 literal, OOV synth, roman-only custom row, a Hàn-Lô lām
+   * romanization); a composition with a hanji-less segment is never learned,
+   * except under Hàn-Lô lām, where a hanji-less segment whose reading is a
+   * dictionary word stands in the phrase as its romanization (§50) and the
+   * phrase still needs one Hanji segment. proto3 `optional` so absent ≠ empty
    * (Codex 2026-09-20 F2: whether a pick has Hanji is an explicit
    * sidechannel, never inferred from `canonical_text` vs `association_tl`).
    * </pre>
@@ -136,8 +142,11 @@ public interface CommitContinuousOrBuilder extends
    * presence marks a Hanji pick (§50 learned phrases); the phrase and the
    * usage store `canonical_text`, the stored spelling, since POJ mode shows
    * a Han-Lo word's romanization in POJ. Wire-absent for a hanji-less pick
-   * (§34 literal, OOV synth, roman-only custom row); a composition with any
-   * hanji-less segment is never learned. proto3 `optional` so absent ≠ empty
+   * (§34 literal, OOV synth, roman-only custom row, a Hàn-Lô lām
+   * romanization); a composition with a hanji-less segment is never learned,
+   * except under Hàn-Lô lām, where a hanji-less segment whose reading is a
+   * dictionary word stands in the phrase as its romanization (§50) and the
+   * phrase still needs one Hanji segment. proto3 `optional` so absent ≠ empty
    * (Codex 2026-09-20 F2: whether a pick has Hanji is an explicit
    * sidechannel, never inferred from `canonical_text` vs `association_tl`).
    * </pre>
@@ -153,10 +162,9 @@ public interface CommitContinuousOrBuilder extends
    * R5 — engine-owned commit resolution: the engine resolves the document
    * text from `roman`, `hanji` and the request's `AppConfig`
    * (`composing::commit_text`), answers `ComposingResponse.commit`, and —
-   * with the user-data stores open — records the pick's usage itself (the
-   * platform sends no `RecordUsage` for it). `UNSPECIFIED` (or a script
-   * newer than the engine) is IGNORED. On the TPS layout the romanization
-   * written renders as Bopomofo.
+   * with the user-data stores open — records the pick's usage itself.
+   * `UNSPECIFIED` (or a script newer than the engine) is IGNORED. On the TPS
+   * layout the romanization written renders as Bopomofo.
    * </pre>
    *
    * <code>.taigi.engine.CommitScript script = 7;</code>
@@ -168,10 +176,9 @@ public interface CommitContinuousOrBuilder extends
    * R5 — engine-owned commit resolution: the engine resolves the document
    * text from `roman`, `hanji` and the request's `AppConfig`
    * (`composing::commit_text`), answers `ComposingResponse.commit`, and —
-   * with the user-data stores open — records the pick's usage itself (the
-   * platform sends no `RecordUsage` for it). `UNSPECIFIED` (or a script
-   * newer than the engine) is IGNORED. On the TPS layout the romanization
-   * written renders as Bopomofo.
+   * with the user-data stores open — records the pick's usage itself.
+   * `UNSPECIFIED` (or a script newer than the engine) is IGNORED. On the TPS
+   * layout the romanization written renders as Bopomofo.
    * </pre>
    *
    * <code>.taigi.engine.CommitScript script = 7;</code>

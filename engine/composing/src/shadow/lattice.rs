@@ -49,7 +49,7 @@ pub(crate) struct ShadowLattice {
 /// DAG, the stripped-separator / hyphen barrier set in shadow coordinates
 /// (§35) and the `--` subset of it (§52). Shared by [`build_continuous_keys`] (left-anchored projection —
 /// byte-identical to pre-S1, the S1 pinning tests guard this)
-/// and `continuous::fetch_walker_slot0_inner` (S2 whole-sentence walker), so the
+/// and `continuous::walk_buffer` (S2 whole-sentence walker), so the
 /// shadow + offset map + DAG are constructed exactly once per fetch and
 /// the consumers cannot drift.
 ///
@@ -64,7 +64,7 @@ pub(crate) fn build_shadow_lattice_with_barriers(
     lattice_from_canonical_with_barriers(&canonical, &canonical_to_raw_end, inv, mode)
 }
 
-/// [`lattice_from_canonical`] plus the merged barrier set: every shadow
+/// Builds the lattice over the canonical shadow with the merged barrier set: every shadow
 /// byte offset where a user separator (TPS space) or compound hyphen was
 /// stripped. Barriers gate the §35 ambiguity expansion — a single
 /// syllable may not cross one, and the glyph before one is Final-only —

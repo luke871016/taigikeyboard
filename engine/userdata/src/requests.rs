@@ -1,7 +1,6 @@
 //! The user-data requests after the open — the pages' (list, save, delete,
-//! CSV and backup import / export, reset) and the key path's
-//! `RecordUsage` — answered from the stores [`UserDataHandle`] opened, and
-//! the dictionary search's custom-entry lookup.
+//! CSV and backup import / export, reset) — answered from the stores
+//! [`UserDataHandle`] opened, and the dictionary search's custom-entry lookup.
 //! `engine/dispatch` routes `UserDataRequest` here and maps [`RequestError`]
 //! to the wire's error code.
 
@@ -13,8 +12,7 @@ use protos::engine::{
     CustomDictionaryRefusal, CustomEntries, CustomEntryDeleted, CustomEntrySaved, ImportBackup,
     ImportCustomCsv, LearningRecord, LearningRecordAddedToCustomDictionary, LearningRecordDeleted,
     LearningRecordKind, LearningRecordOrder, LearningRecordSaved, LearningRecords,
-    ListCustomEntries, ListLearningRecords, RecordUsage, ResetUserData, SaveCustomEntry,
-    UserDataReset,
+    ListCustomEntries, ListLearningRecords, ResetUserData, SaveCustomEntry, UserDataReset,
 };
 
 use crate::paging::{last_page_offset, saturated_u32};
@@ -38,8 +36,8 @@ pub enum RequestError {
 }
 
 impl UserDataHandle {
-    /// A page's request — everything but the open and the key path's
-    /// `RecordUsage` — answered from stores that have finished opening.
+    /// A page's request — everything but the open — answered from stores
+    /// that have finished opening.
     pub(crate) fn handle_page(
         stores: &UserDataStores,
         method: &user_data_request::Method,
@@ -101,7 +99,7 @@ impl UserDataHandle {
                 )?)
             }
             // Answered by `handle` before a page request is looked at.
-            Method::Open(_) | Method::RecordUsage(_) => {
+            Method::Open(_) => {
                 return Err(RequestError::Invalid("not a page request"));
             }
         })
@@ -122,7 +120,10 @@ impl UserDataHandle {
         let rows = phonetics::api::derive_custom_query_key(query, input_mode)
             .map(|key| stores.custom_dictionary.rows_matching(&key, limit))
             .unwrap_or_default();
-        Ok(rows.iter().map(custom_dictionary_entry).collect())
+        Ok(rows
+            .iter()
+            .map(|row| custom_dictionary_entry(row, String::new()))
+            .collect())
     }
 
     fn list_custom_entries(
@@ -147,8 +148,19 @@ impl UserDataHandle {
         let entries = dictionary
             .rows(&list.filter, limit, offset)
             .map_err(store_error)?;
+        let mode = phonetics::api::parse_input_mode(&list.input_mode);
         Ok(CustomEntries {
-            entries: entries.iter().map(custom_dictionary_entry).collect(),
+            entries: entries
+                .iter()
+                .map(|row| {
+                    let display_roman = phonetics::api::custom_display_roman(
+                        &row.roman,
+                        mode,
+                        list.tps_or_maps_to_er,
+                    );
+                    custom_dictionary_entry(row, display_roman)
+                })
+                .collect(),
             total: saturated_u32(total),
             matching_total: saturated_u32(matching_total),
             offset: saturated_u32(offset),
@@ -205,7 +217,9 @@ impl UserDataHandle {
         let stored = dictionary.row(&row.id).map_err(store_error)?;
         Ok(CustomEntrySaved {
             refusal: CustomDictionaryRefusal::None as i32,
-            entry: stored.as_ref().map(custom_dictionary_entry),
+            entry: stored
+                .as_ref()
+                .map(|row| custom_dictionary_entry(row, String::new())),
             detail: String::new(),
         })
     }
@@ -321,19 +335,6 @@ impl UserDataHandle {
         })
     }
 
-    /// One commit counted from outside the engine. No platform sends it since
-    /// the engine counts every pick itself (Android's English-pick sender went
-    /// in G4); tests seed counts with it. It names no Hanji: the learned-phrase
-    /// touch (§50) belongs to the commits the engine resolves itself.
-    pub(crate) fn record_usage(&self, usage: &RecordUsage) -> Result<(), RequestError> {
-        let stores = self.opened_stores()?;
-        if usage.display_text.is_empty() {
-            return Err(RequestError::Invalid("usage without a display text"));
-        }
-        stores.record_usage(&usage.display_text, &usage.canonical_tl, None, false);
-        Ok(())
-    }
-
     fn reset(
         stores: &UserDataStores,
         reset: &ResetUserData,
@@ -400,11 +401,17 @@ fn required_roman(roman: &str) -> Option<&str> {
     Some(roman.trim()).filter(|roman| !roman.is_empty())
 }
 
-fn custom_dictionary_entry(row: &CustomDictionaryRow) -> CustomDictionaryEntry {
+/// The stored row as saved; `display_roman` is the list's rendering, empty
+/// in every other answer.
+fn custom_dictionary_entry(
+    row: &CustomDictionaryRow,
+    display_roman: String,
+) -> CustomDictionaryEntry {
     CustomDictionaryEntry {
         id: row.id.clone(),
         roman: row.roman.clone(),
         hanji: row.hanji.clone(),
+        display_roman,
     }
 }
 
@@ -495,25 +502,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_usage_without_a_display_text_is_refused() {
-        let directory = tempfile::tempdir().unwrap();
-        let handle = UserDataHandle::new();
-        handle.handle(&open_request(directory.path())).unwrap();
-
-        assert_eq!(
-            handle
-                .handle(&UserDataRequest {
-                    method: Some(user_data_request::Method::RecordUsage(RecordUsage {
-                        canonical_tl: "tâi-uân".into(),
-                        ..RecordUsage::default()
-                    })),
-                })
-                .unwrap_err(),
-            RequestError::Invalid("usage without a display text")
-        );
-    }
-
     fn reset_request(reset: ResetUserData) -> UserDataRequest {
         UserDataRequest {
             method: Some(user_data_request::Method::Reset(reset)),
@@ -592,6 +580,7 @@ mod tests {
                 filter: filter.into(),
                 limit: 50,
                 offset: 0,
+                ..Default::default()
             }),
         ) {
             user_data_response::Result::CustomEntries(entries) => entries,
@@ -1082,6 +1071,7 @@ mod tests {
                 filter: String::new(),
                 limit: 2,
                 offset: 10,
+                ..Default::default()
             }),
         ) {
             user_data_response::Result::CustomEntries(entries) => entries,
@@ -1097,12 +1087,50 @@ mod tests {
                 filter: String::new(),
                 limit: 0,
                 offset: 0,
+                ..Default::default()
             }),
         ) {
             user_data_response::Result::CustomEntries(entries) => entries,
             other => panic!("expected entries, got {other:?}"),
         };
         assert_eq!(everything.entries.len(), 3, "limit 0 lists every match");
+    }
+
+    // trace: reading "tâi-uân" (phonetics custom_display_roman): POJ uân→oân;
+    // TPS t=ㄉ ai=ㄞ 5=ˊ · uan=ㄨㄢ 5=ˊ. `roman` stays as saved in every mode.
+    #[test]
+    fn a_list_renders_each_entry_in_the_input_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let handle = UserDataHandle::new();
+        handle.handle(&open_request(directory.path())).unwrap();
+        let saved = save(&handle, None, "tâi-uân", "台灣");
+        assert_eq!(
+            saved.entry.unwrap().display_roman,
+            "",
+            "only a list renders"
+        );
+
+        for (input_mode, shown) in [
+            ("tl", "tâi-uân"),
+            ("poj", "tâi-oân"),
+            ("tps", "ㄉㄞˊ ㄨㄢˊ"),
+            ("english", "tâi-uân"),
+            ("", "tâi-uân"),
+        ] {
+            let answer = match call(
+                &handle,
+                user_data_request::Method::ListCustomEntries(ListCustomEntries {
+                    input_mode: input_mode.into(),
+                    tps_or_maps_to_er: true,
+                    ..Default::default()
+                }),
+            ) {
+                user_data_response::Result::CustomEntries(entries) => entries,
+                other => panic!("expected entries, got {other:?}"),
+            };
+            assert_eq!(answer.entries[0].display_roman, shown, "{input_mode:?}");
+            assert_eq!(answer.entries[0].roman, "tâi-uân", "{input_mode:?}");
+        }
     }
 
     #[test]
@@ -1223,13 +1251,10 @@ mod tests {
         handle.handle(&request).unwrap();
         // trace: the stores are published before the answer, so this pick
         // queues behind the open on the frequency store's worker.
-        call(
-            &handle,
-            user_data_request::Method::RecordUsage(RecordUsage {
-                display_text: "台灣".into(),
-                canonical_tl: "tâi-uân".into(),
-            }),
-        );
+        handle
+            .stores()
+            .unwrap()
+            .record_usage("台灣", "tâi-uân", None, false);
 
         // A page request waits for the open to finish.
         assert_eq!(

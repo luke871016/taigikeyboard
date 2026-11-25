@@ -49,6 +49,12 @@ protocol EngineSettings {
     // CROSS-PLATFORM INVARIANT — mirrors android/app/src/main/java/com/siansiansu/taigikeyboard/ime/settings/EngineSettings.kt:isKhinsiannInHanjiEnabled.
     var isKhinsiannInHanjiEnabled: Bool { get }
 
+    /// Hàn-Lô lām (`AppConfig.han_lo_mixed`): every word also offers its romanization as a
+    /// candidate and a next-word prediction of its own. The engine ignores it under
+    /// Romanization Only and the TPS layout.
+    // CROSS-PLATFORM INVARIANT — mirrors android/app/src/main/java/com/siansiansu/taigikeyboard/ime/settings/EngineSettings.kt:isHanLoMixedEnabled.
+    var isHanLoMixedEnabled: Bool { get }
+
     /// The POJ marker options (double-tap folds + Nasal mark in POJ capitals, §53) bundled as a
     /// live-read value so `ComposingState` / `ToneConverter` can stay
     /// Foundation-pure.
@@ -74,8 +80,8 @@ protocol EngineSettings {
 
     // kautian subcollection toggles (nested under the kautian master). Order
     // mirrors config.yaml dialect_columns; the bridge packs these into the
-    // KautianSubcollectionToggles proto and `dictionary_filter_bitmask` owns the subtag bit
-    // layout. Absent gate ⇒ engine keeps legacy all-on (DD5).
+    // KautianSubcollectionToggles proto and `dictionary_filter_bitmask` owns the subtag
+    // bit layout.
     var isKautianAccentLukangEnabled: Bool { get }
     var isKautianAccentSansiaEnabled: Bool { get }
     var isKautianAccentTaipakEnabled: Bool { get }

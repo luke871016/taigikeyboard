@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.siansiansu.taigikeyboard.R
 import com.siansiansu.taigikeyboard.i18n.generated.L10n
@@ -44,6 +45,7 @@ import com.siansiansu.taigikeyboard.ime.settings.PrefHelper
 import com.siansiansu.taigikeyboard.ime.settings.candidateDisplayModeOptions
 import com.siansiansu.taigikeyboard.ime.settings.nasalMarkerStyleOptions
 import com.siansiansu.taigikeyboard.ime.settings.syllableSeparatorOptions
+import com.siansiansu.taigikeyboard.ime.text.keyboard.computeBottomInsetPadding
 import com.siansiansu.taigikeyboard.ime.theme.themeBackground
 import com.siansiansu.taigikeyboard.ui.components.SwitchRow
 import com.siansiansu.taigikeyboard.ui.theme.AppStyle
@@ -62,6 +64,8 @@ fun SettingsOverlayContent(
     refreshTrigger: Int,
     onDismiss: () -> Unit,
     onOpenApp: () -> Unit,
+    /** Navigation-bar inset the keyboard body pads by; the overlay covers that band too. */
+    bottomInset: Dp = computeBottomInsetPadding(),
 ) {
     val scope = rememberCoroutineScope()
 
@@ -81,6 +85,7 @@ fun SettingsOverlayContent(
     // Annotate in Brackets binds the STORED flag; it is only disabled (not cleared) while roman-only.
     var outputBoth by remember(refreshTrigger) { mutableStateOf(prefs.storedOutputBothScripts) }
     var khinsiannInHanji by remember(refreshTrigger) { mutableStateOf(prefs.isKhinsiannInHanjiEnabled) }
+    var hanLoMixed by remember(refreshTrigger) { mutableStateOf(prefs.isHanLoMixedEnabled) }
     var literalRomanCandidate by remember(refreshTrigger) { mutableStateOf(prefs.literalRomanCandidateEnabled) }
     var autoCap by remember(refreshTrigger) { mutableStateOf(prefs.autoCapitalizationEnabled) }
     var autoSpace by remember(refreshTrigger) { mutableStateOf(prefs.isAutoSpaceEnabled) }
@@ -119,6 +124,8 @@ fun SettingsOverlayContent(
             Modifier
                 .fillMaxSize()
                 .themeBackground(appearance.surface, appearance.solidBackground, topInsetPx)
+                // The surface runs under the navigation bar like the keyboard's; the rows stop above it.
+                .padding(bottom = bottomInset)
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 8.dp),
     ) {
@@ -169,6 +176,24 @@ fun SettingsOverlayContent(
             onCheckedChange = {
                 khinsiannInHanji = it
                 prefs.isKhinsiannInHanjiEnabled = it
+                autoDismissIfNeeded()
+            },
+            labelColor = labelColor,
+            fontFamily = fontFamily,
+            switchColors = switchColors,
+        )
+        // Romanization candidates: the engine ignores it under Romanization Only, side by side
+        // led by the romanization and on TPS, so it greys there, as on the desktops
+        // (`SettingsDocument::allows_han_lo_mixed`).
+        SwitchRow(
+            label = L10n.settingsHanLoMixed,
+            checked = hanLoMixed,
+            enabled =
+                candidateDisplayMode.allowsHanLoMixed(prefs.storedIsHanjiFirst) &&
+                    !prefs.isTpsLayout,
+            onCheckedChange = {
+                hanLoMixed = it
+                prefs.isHanLoMixedEnabled = it
                 autoDismissIfNeeded()
             },
             labelColor = labelColor,

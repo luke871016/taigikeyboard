@@ -65,6 +65,7 @@ fn ctx<'a>(
         tone_pin: lexicon::TonePin::None,
         whole_buffer_key: None,
         khinsiann_in_hanji: false,
+        roman_twins: false,
     }
 }
 
@@ -97,10 +98,6 @@ fn build_fixture(name: &str, rows: &[Row<'_>]) -> (PrefixIndex, DictionaryReader
 
     (prefix_index, dict)
 }
-
-// ---------------------------------------------------------------------------
-// 1. Score stays dictionary-only; user_weight grows with count and saturates.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn selections_leave_score_untouched_and_raise_user_weight() {
@@ -180,10 +177,6 @@ fn user_weight_saturates_when_count_high() {
         out[0].user_weight
     );
 }
-
-// ---------------------------------------------------------------------------
-// 2. user_weight — decayed selection weight; 0.0 on clock skew / no clock.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn user_weight_is_one_selection_delta_when_just_selected() {
@@ -317,10 +310,6 @@ fn user_weight_zero_when_now_ms_is_zero() {
     assert_eq!(out[0].user_weight, 0.0);
 }
 
-// ---------------------------------------------------------------------------
-// 3. End-to-end: user_weight reordering inside the same tier.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn selected_candidate_outranks_never_selected_within_same_tier_and_coverage() {
     // Two homophones under `tl:tai`, both Tier 0 (full-buffer `tai`),
@@ -417,10 +406,6 @@ fn rare_selected_homophone_outranks_common_never_selected_after_hours() {
     assert!(out[0].score < out[1].score);
 }
 
-// ---------------------------------------------------------------------------
-// 4. Cold-start backward compatibility (= PR-9.2 behaviour).
-// ---------------------------------------------------------------------------
-
 #[test]
 fn empty_freq_map_with_zero_now_matches_pre_9_3a_behaviour() {
     // The motivating Phase 9 case: `taiuantaigi`. PR-9.1 ranks
@@ -481,10 +466,6 @@ fn empty_freq_map_with_zero_now_matches_pre_9_3a_behaviour() {
         out.iter().map(|c| c.user_weight).collect::<Vec<_>>()
     );
 }
-
-// ---------------------------------------------------------------------------
-// 5. Headline acceptance — full-buffer phrase + selection → still slot #1.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn mismatched_display_text_key_leaves_score_neutral() {

@@ -19,7 +19,7 @@ SHELL := /usr/bin/env sh
 .DEFAULT_GOAL := help
 
 .PHONY: build protos ios-libs android-libs macos-libs test test-crate test-changed doc dict dogfood e2e help \
-        fmt lint lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths hooks scan-secrets scan-secrets-full scan-private \
+        fmt lint lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths hooks scan-secrets scan-secrets-full scan-private \
         i18n i18n-test \
         desktop-release desktop-patch desktop-announce version-mobile version-desktop \
         windows-check windows-release desktop-check linux-check macos-rust-check web-check web-serve web-e2e \
@@ -167,7 +167,7 @@ macos-rust-check:
 
 # The Linux input method's host gate (docs/architecture/linux-roadmap.md L12):
 # native tests + clippy for `linux/` (zbus + GTK build on macOS), a cross
-# build of the engine for x86_64-unknown-linux-gnu via cargo-zigbuild, fmt,
+# build of the engine for x86_64- and aarch64-unknown-linux-gnu via cargo-zigbuild, fmt,
 # i18n check. Compilation proof only; behaviour is the dogfood run-book's.
 linux-check:
 	$(MAKE) -C linux check
@@ -277,8 +277,10 @@ version-mobile version-desktop:
 #           to a curly quote that ends the string it sits in.
 #   Agents  `.claude/rules/` names the same paths as docs/contributing/README.md
 #           (lint-agent-rule-paths; tools/agent_rule_paths.py says why).
+#   Docs    every repo path a living doc names exists
+#           (lint-doc-paths; tools/doc_paths.py says why).
 # CI runs the same checks: engine.yml, desktop-shared.yml, macos.yml, web.yml, codegen-lint.yml,
-# android.yml, agent-rule-paths.yml on pull requests; linux-build.yml nightly.
+# android.yml, agent-rule-paths.yml, doc-paths.yml on pull requests; linux-build.yml nightly.
 RUST_WORKSPACES := engine desktop windows linux macos
 
 fmt:
@@ -287,7 +289,7 @@ fmt:
 	swiftformat ios macos
 	cd android && ./gradlew spotlessApply
 
-lint: lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths
+lint: lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths
 	for ws in $(RUST_WORKSPACES); do cargo fmt --all --check --manifest-path $$ws/Cargo.toml || exit 1; done
 	cargo clippy --manifest-path $(ENGINE)/Cargo.toml --workspace --all-targets --locked -- -D warnings
 	cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked -- -D warnings
@@ -307,6 +309,9 @@ lint-swiftui-literals:
 
 lint-agent-rule-paths:
 	python3 tools/agent_rule_paths.py
+
+lint-doc-paths:
+	python3 tools/doc_paths.py
 
 lint-ps1:
 	@git ls-files -z '*.ps1' | xargs -0 perl -ne 'if (/[^\t\r\n\x20-\x7e]/) { print "$$ARGV:$$.: non-ASCII byte (Windows PowerShell 5.1 reads BOM-less scripts as ANSI)\n"; $$bad = 1 } close ARGV if eof; END { exit $$bad }'

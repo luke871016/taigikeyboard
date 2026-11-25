@@ -106,7 +106,7 @@ The end of a record is determined by the *next* record's offset (or `data.count`
 - `tl_len > 0` for every record (TL is required; hanzi may be absent).
 - `hanzi == ""` is encoded as `hanzi_len == 0` and yields `None` in the reader, **not** an empty string.
 - UTF-8 must be valid; the Rust reader returns `None` for the whole record on `from_utf8` failure for either `tl` or `hanzi` (when `hanzi_len > 0`).
-- Record bytes are not aligned; the Rust reader uses unaligned little-endian reads via `byteorder::LE`.
+- Record bytes are not aligned; the Rust reader uses unaligned little-endian reads (`u32::from_le_bytes` and friends on byte slices).
 
 ### 1.4 Validation performed by reader (Rust `engine/lexicon::dictionary_reader`)
 
@@ -253,7 +253,7 @@ The abbreviation face has its own family per romanization (`behavioral-invariant
 | Concern | Location |
 |---|---|
 | fst load + range/prefix search | Rust `engine/lexicon::prefix_index::PrefixIndex` |
-| mmap unsafe boundary | Rust `engine/mmap-host::MmapHandle` (only crate not `forbid unsafe_code`) |
+| mmap unsafe boundary | Rust `engine/mmap-host::MmapHandle` (the only engine domain crate allowed `unsafe_code`; the FFI crates `swift-ffi` / `android-jni` are the others) |
 | Lookup orchestration | Rust `engine/lexicon::search::search` |
 | Platform bridge (dictionary search page) | iOS `RustEngineBridge.dictionarySearch` (`RustEngineBridge+Lexicon.swift`); Android `RustEngineBridge.dictionarySearch` (`LexiconBridge.kt`) |
 
@@ -375,22 +375,21 @@ row belongs to. `0` for non-kautian rows. A row may carry multiple classes
 has enabled.
 
 ```
-  bit  13      KAUTIAN_SUBCOLL_ACTIVE — control sentinel. 0 ⇒ engine SKIPS the
-               subcollection gate entirely (legacy / pre-UI default = all on,
-               zero behaviour change). A platform that has the toggles sets this.
+  bit  13      unused (was the "gate active" sentinel; removed 2026-11-24).
   bits 14..=26 subcollection enable mask, SAME 13-bit layout as the subtag.
   bits 27-31   reserved (unknown high bits ignored for forward-compat).
 ```
 
-`u32::MAX` (the all-enabled sentinel) carries bit 13 + every enable bit set, so
+`u32::MAX` (the all-enabled sentinel) carries every enable bit, so
 "all sources/subcollections on" stays consistent. Owner of the bit positions:
 `dictionary/common/source_bits.py::encode_kautian_subtag` +
 `engine/lexicon/src/dictionary_reader.rs` (`KAUTIAN_SUBTAG_*` / `WIRE_KAUTIAN_SUBCOLL_*`).
 
-ENCODE: `dictionary_filter_bitmask` sets bit 13 + the enable mask from
-`DictionarySourceToggles.kautian_subcollections` (a nested message — PRESENCE
-is the active sentinel). Every platform always sends it; a caller that leaves
-it absent keeps the gate off = legacy all-on. The same mask gates the Tab3
+ENCODE: `dictionary_filter_bitmask` sets the enable mask from
+`DictionarySourceToggles.kautian_subcollections` (main always on); with the
+kautian source off the reader skips the gate. Contract: every shell
+always sends the message; an absent one reads as the proto default (main only).
+The same mask gates the Tab3
 dictionary-browse path and the keyboard fetch (`engine/composing/src/requests.rs`
 `source_filter_bitmask` resolves the request's `AppConfig.dictionary_sources`). NextWord filters with
 the source-only association mask, so subcollection toggles do not reach it.
@@ -410,7 +409,7 @@ When ANY of the following changes, ALL listed files MUST be updated in the same 
 | Key prefix list (`tl:` / `poj:` / `tps:`, `tl-abbrev:` / `poj-abbrev:` / `tps-abbrev:`, `hanzi:`) | build script (`create_fst.py`), Rust `phonetics::KeyFamily`, this doc |
 | `syllables.fst` families + canonicalizers (§3.5) | `create_syllables_fst.py`, `fst-builder` `syllables.rs`, Rust `phonetics::canonicalize_*syllable`, `engine/lexicon::syllable_inventory`, this doc |
 | Magic bytes (`TKDB` / `TKWA`) | build script, Rust readers, this doc |
-| File version (`dictionary.bin = 4`, `association.bin = 2`) | build script, Rust readers, this doc |
+| File version (`dictionary.bin = 6`, `association.bin = 2`) | build script, Rust readers, this doc |
 | Endianness (little-endian) | build script, Rust readers |
 
 ### 5.1 No-checksum acknowledgement
@@ -435,7 +434,7 @@ Steps, inputs and outputs: [`dictionary/README.md` § Pipeline](../../dictionary
 
 1. Sort `association.bin` keys by raw UTF-8 byte order ascending, and each key's entries by `count` DESC.
 2. Emit `dictionary.fst` and `syllables.fst` via `engine/build-helpers/fst-builder`, keys carrying the family prefix (`tl:` / `poj:` / `tps:` / `*-abbrev:` / `hanzi:`).
-3. Use bit positions exactly per §4, magic bytes per §1 / §2, version `4` for `dictionary.bin` and `2` for `association.bin`.
+3. Use bit positions exactly per §4, magic bytes per §1 / §2, version `6` for `dictionary.bin` and `2` for `association.bin`.
 4. Include every key form (TL / POJ / TPS numeric + toneless under the phonetic family, each abbreviation under its `*-abbrev:` family) plus `hanzi:` keys for reverse lookup.
 
 ---

@@ -3,9 +3,9 @@
 use super::dedupe::{dedupe_rendered_continuous, dedupe_same_commit_hanji, retain_absent_from};
 use super::partial_prefix::fetch_via_lexicon_partial_inner;
 use super::recase::{recase_all, recase_roman, recase_tl_as_poj_display, shows_poj_roman_in_hanji};
-use super::walk::{fetch_walker_slot0_inner, synth_consumed_span};
+use super::walk::{synth_consumed_span, synth_cut, walker_slot0, SynthCut};
 
-use crate::shadow::{build_continuous_keys, build_partial_prefix_key};
+use crate::shadow::{build_continuous_keys, build_partial_prefix_key, ContinuousKeys};
 use lexicon::dictionary_reader::NO_ROWID;
 use lexicon::{
     fetch_candidates_for_keys_with_barriers, fetch_partial_prefix_candidates,
@@ -32,12 +32,20 @@ pub(crate) enum ListShape {
     Word,
 }
 
-/// The rows [`assemble_candidates`] lists, and whether the Step 4d post-pass
-/// moved a one-word walker path ahead of one-syllable prefix picks.
-#[derive(Debug, Default)]
+/// The rows [`assemble_candidates`] lists, and how it read the buffer — what
+/// the developer explain view (`continuous::segmentation`) shows, so the view
+/// never re-derives a cut the list did not use.
+#[derive(Default)]
 pub(crate) struct Assembled {
     pub(crate) candidates: Vec<RawCandidate>,
+    /// The Step 4d post-pass moved a one-word walker path ahead of
+    /// one-syllable prefix picks.
     pub(crate) walker_moved: bool,
+    /// The keys and shadow the fetch built; `None` without an inventory.
+    pub(crate) keys: Option<ContinuousKeys>,
+    /// The walker cut slot 0 was built from; `None` when no synth was listed
+    /// (suppressed, or a several-word path in a [`ListShape::Word`] list).
+    pub(crate) synth: Option<SynthCut>,
 }
 
 /// A picked one-syllable word reached as a prefix extension (`ko` → a
@@ -162,6 +170,7 @@ pub(crate) fn assemble_candidates(
     now_ms: i64,
     custom: &[CustomEntry],
     learned: &[LearnedEntry],
+    edge_rows: (&[CustomEntry], &[LearnedEntry]),
     mode: phonetics::InputMode,
     context: &ranking::ContextRanks,
     config: &protos::engine::AppConfig,
@@ -173,6 +182,7 @@ pub(crate) fn assemble_candidates(
     let force_lowercase_nasal_marker = config.force_lowercase_nasal_marker;
     let dedupe_commit_hanji = super::dedupe::should_dedupe_commit_hanji(config, mode);
     let khinsiann_in_hanji = config.khinsiann_in_hanji;
+    let roman_twins = crate::requests::lists_roman_twins(config, mode);
     LexiconHandle::with_state(|state| {
         let inv = state.syllable_inventory.as_ref();
         let prefix = state.prefix_index.as_ref();
@@ -224,6 +234,7 @@ pub(crate) fn assemble_candidates(
                     .then(|| build_partial_prefix_key(raw, mode).map(|(_, key)| key))
                     .flatten(),
                 khinsiann_in_hanji,
+                roman_twins,
             });
 
         // ---- Step 1: build keys + shadow/lattice (D1 fold).
@@ -263,6 +274,7 @@ pub(crate) fn assemble_candidates(
         // Whether Step 4 put a one-word path into the sort, at index 0.
         let mut release_one_word = false;
         let mut walker_moved = false;
+        let mut synth: Option<SynthCut> = None;
 
         // ---- Step 2: empty-keys partial-prefix vs span-local fetch.
         let mut candidates: Vec<RawCandidate> = if keys.is_empty() {
@@ -348,7 +360,7 @@ pub(crate) fn assemble_candidates(
             for cand in &mut c {
                 let (cs, ce) = cand.consumed_span;
                 if let Some(seg) = raw.get(cs as usize..ce as usize) {
-                    cand.roman = recase_roman(&cand.roman, seg, mode);
+                    cand.roman = recase_roman(&cand.roman, seg);
                 }
             }
             apply_hanji_display(&mut c, khinsiann_in_hanji, mode);
@@ -370,7 +382,7 @@ pub(crate) fn assemble_candidates(
             // shadow path). The unified `valid_span_endings_lowered`
             // dispatcher routes TPS through its own inventory-gated
             // scanner inside the same `build_shadow_lattice_with_barriers` /
-            // `build_lattice` call, so the walker sees a real DAG and
+            // `build_lattice_with_barriers` call, so the walker sees a real DAG and
             // can emit a slot-0 whole-sentence best path for TPS too.
             //
             // A2 D1 fold: the walker receives the pre-built
@@ -378,12 +390,36 @@ pub(crate) fn assemble_candidates(
             // `prefix`/`dict` from the single seam `with_state`
             // scope — no second `build_shadow_lattice_with_barriers` per fetch.
             {
-                if let (Some(continuous_keys), Some(inv), Some(ctx)) =
+                if let (Some(continuous_keys), Some(inv), Some(list_ctx)) =
                     (continuous_keys.as_ref(), inv, lex_ctx.as_ref())
                 {
-                    if let Some(slot0) =
-                        fetch_walker_slot0_inner(raw, raw_len, continuous_keys, inv, ctx)
-                            .filter(|slot0| shape == ListShape::Sentence || slot0.edge_count == 1)
+                    // The walk also meets the user rows filed under its inner
+                    // edges (`UserRows::edge_custom` / `edge_learned`), which
+                    // the list never shows: a row of the list covers the
+                    // whole buffer.
+                    let (edge_custom, edge_learned) = edge_rows;
+                    let walker_custom: Vec<CustomEntry>;
+                    let walker_learned: Vec<LearnedEntry>;
+                    let walker_ctx;
+                    let ctx = if edge_custom.is_empty() && edge_learned.is_empty() {
+                        list_ctx
+                    } else {
+                        walker_custom = custom.iter().chain(edge_custom).cloned().collect();
+                        walker_learned = learned.iter().chain(edge_learned).cloned().collect();
+                        walker_ctx = ContinuousFetchCtx {
+                            custom: &walker_custom,
+                            learned: &walker_learned,
+                            tone_pin: list_ctx.tone_pin.clone(),
+                            whole_buffer_key: list_ctx.whole_buffer_key.clone(),
+                            ..*list_ctx
+                        };
+                        &walker_ctx
+                    };
+                    synth = synth_cut(raw_len, continuous_keys, inv, ctx)
+                        .filter(|cut| shape == ListShape::Sentence || cut.path.edges.len() == 1);
+                    if let Some(slot0) = synth
+                        .as_ref()
+                        .map(|cut| walker_slot0(raw, continuous_keys, ctx, cut))
                     {
                         let composed_from_edges = slot0.edge_count >= 2;
                         // R2 identity sidechannel: read the canonical TL the
@@ -412,7 +448,7 @@ pub(crate) fn assemble_candidates(
                         };
                         // `hoogua` bug (2026-06-02): the walker synth
                         // joins per-syllable canonical romans with a
-                        // SPACE (`fetch_walker_slot0_inner` ~`.join(" ")`).
+                        // SPACE (`walker_slot0` ~`.join(" ")`).
                         // For a genuine multi-word reading (台語齒盤) that
                         // space-join IS the desired display. But when the
                         // synth's full-buffer `(hanji, span)` coincides
@@ -437,7 +473,7 @@ pub(crate) fn assemble_candidates(
                         //   `consumed_span` → a real whole-buffer dict word.
                         // * `roman_reading_eq` → `hōo guá` matches
                         //   `hōo--guá` (予我) but NOT `hōo-guā` (戶外,
-                        //   tone 7 ≠ tone 2) — respects Core Principle #7
+                        //   tone 7 ≠ tone 2) — respects Core Principle #6
                         //   word identity (Hanji + canonical romanization).
                         // * `!slot0_cand.is_custom` → never replace a
                         //   custom-influenced walker path with a non-custom
@@ -560,7 +596,7 @@ pub(crate) fn assemble_candidates(
             // Step 4b must NOT emit a `(0, raw_len)`-span candidate that
             // would mis-commit the pending `-`. Mirrors the walker
             // slot-0 trailing-hyphen suppression at
-            // `fetch_walker_slot0_inner`'s `synth_consumed_span?`
+            // `synth_cut`'s `synth_consumed_span?`
             // early-out, same contract.
             //
             // **Recase.** Recase is centralized in
@@ -578,7 +614,7 @@ pub(crate) fn assemble_candidates(
             // `dedupe_by_roman_hanji_span` pre-sort, but that does not
             // span batches. A partial-prefix hit on the same dict row
             // already present in the FULL block (walker slot-0 recases
-            // edge-by-edge in `fetch_walker_slot0_inner`; span-local
+            // edge-by-edge in `walker_slot0`; span-local
             // recases here at Step 3) normalizes to the same `(roman,
             // hanji, consumed_span)` triple, or carries the same
             // `(canonical_tl, hanji, consumed_span)` identity, and collapses.
@@ -623,7 +659,7 @@ pub(crate) fn assemble_candidates(
                     //
                     // Known divergence (Codex post-impl SHIP-WITH-FIXES
                     // 2026-05-29): walker slot-0 joins per-edge-recased
-                    // syllables with a space (see [`fetch_walker_slot0_inner`]),
+                    // syllables with a space (see [`walker_slot0`]),
                     // whereas `ext` recases the full raw segment as one
                     // string. For multi-edge walker paths with mixed-case
                     // per-syllable intent like `TaIGi`, walker produces
@@ -664,7 +700,7 @@ pub(crate) fn assemble_candidates(
         if let Some(ctx) = lex_ctx.as_ref() {
             if let Some(key) = crate::shadow::abbrev_query_key(raw, mode) {
                 let mut abbrev = lexicon::fetch_abbrev_candidates(&key, raw_len, ctx);
-                recase_all(&mut abbrev, raw, mode);
+                recase_all(&mut abbrev, raw);
                 apply_hanji_display(&mut abbrev, khinsiann_in_hanji, mode);
                 retain_absent_from(&candidates, &mut abbrev);
                 abbrev.truncate(PARTIAL_PREFIX_OUTPUT_CAP);
@@ -758,7 +794,8 @@ pub(crate) fn assemble_candidates(
             }
         }
         // Syllable Separator (§49) — same presentation seam, same field:
-        // only `roman`, for dictionary, custom and walker rows alike;
+        // `roman` (and the romanized words of a Han-Lo `hanji`), for
+        // dictionary, custom and walker rows alike;
         // `display_text` / `canonical_tl` keep the dictionary form. After
         // the POJ render (which splits on `-`), before the rendered
         // dedupe (which keys on what the cell shows) and before the §34
@@ -768,6 +805,17 @@ pub(crate) fn assemble_candidates(
             for cand in &mut candidates {
                 if cand.roman.contains('-') {
                     cand.roman = phonetics::api::syllable_joiner_display(&cand.roman, joiner);
+                }
+                // The romanized words a Han-Lo spelling writes (`我tâi-gí`,
+                // a Hàn-Lô lām sentence or learned phrase, `啥mih`) follow
+                // the same setting, as the nailed commit of the same picks
+                // renders them; its Hanji and their khinsiann markers stay.
+                if let Some(hanji) = &cand.hanji {
+                    if let std::borrow::Cow::Owned(rendered) =
+                        phonetics::api::syllable_joiner_in_hanji(hanji, joiner)
+                    {
+                        cand.hanji = Some(rendered);
+                    }
                 }
             }
         }
@@ -784,6 +832,19 @@ pub(crate) fn assemble_candidates(
                 )
             {
                 cand.roman = roman;
+            }
+            // A Hàn-Lô lām sentence writes its romanized words in the Hanji
+            // too (`我SIÂᴺ`); a Hanji character carries no marker, so this
+            // only ever touches those.
+            if let Some(hanji) = &cand.hanji {
+                if let std::borrow::Cow::Owned(hanji) =
+                    phonetics::case_transform::apply_nasal_marker_case(
+                        hanji,
+                        force_lowercase_nasal_marker,
+                    )
+                {
+                    cand.hanji = Some(hanji);
+                }
             }
         }
         if mode == phonetics::InputMode::Poj
@@ -814,6 +875,8 @@ pub(crate) fn assemble_candidates(
         Ok(Assembled {
             candidates,
             walker_moved,
+            keys: continuous_keys,
+            synth,
         })
     })
     .unwrap_or_default()

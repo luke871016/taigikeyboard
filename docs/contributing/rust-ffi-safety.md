@@ -8,7 +8,7 @@ Rules for the Rust ↔ platform boundary: the seam as built, panic / thread / er
 
 ### 1.1 The seam as built
 
-- **Engine adapters (iOS, macOS, Android)** — a process-singleton, bytes-in / bytes-out seam. The entry takes only `bytes: &[u8]` and reaches the engine through `EngineHandle::instance()` (`engine/composing/src/handle.rs`); no handle crosses the boundary and there is no shutdown call — the singleton owns its lifetime, and the user-data stores are process-wide in `userdata` (`UserDataHandle`, opened once by `OpenUserData`). Live entry points: `process_request_bytes` / `install_logger_sink` / `set_log_level` / `panic_for_test` / `e2e_trace_open` (`engine/swift-ffi`) and `processRequestBytes` / `registerLogger` / `setLogLevel` / `panicForTest` / `e2eTraceOpen` (`engine/android-jni`). Both call `dispatch::process_request` directly.
+- **Engine adapters (iOS, macOS, Android)** — a process-singleton, bytes-in / bytes-out seam. The entry takes only `bytes: &[u8]` and reaches the engine through `EngineHandle::instance()` (`engine/composing/src/handle.rs`); no handle crosses the boundary and there is no shutdown call — the singleton owns its lifetime, and the user-data stores are process-wide in `userdata` (`UserDataHandle`, opened once by `OpenUserData`). Live entry points: `process_request_bytes` / `install_logger_sink` / `set_log_level` / `panic_for_test` (`engine/swift-ffi`) and `processRequestBytes` / `registerLogger` / `setLogLevel` / `panicForTest` (`engine/android-jni`). Both call `dispatch::process_request` directly.
 - **macOS desktop shell** — a second bytes seam in the same archive: `desktop_request_bytes` (`macos/crates/taigi-macos-ffi/src/lib.rs`), which links `engine/swift-ffi` as an rlib so macOS ships ONE static library and the engine's statics exist once (`docs/architecture/macos-desktop-core-roadmap.md` D1, D2). Envelope `macos/crates/taigi-macos-ffi/proto/desktop_shell.proto`; its `DesktopResponse.error` is the engine's `ErrorCode` (§1.5). Same rules as the engine adapters: no handle crosses, `catch_unwind`, the §1.4 cap, no `unsafe`.
 - **Linux Fcitx5 addon** — a C ABI over `taigi-linux-core` (`linux/crates/taigi-linux-ffi`, contract `include/taigikeyboard.h`): opaque handles (`TaigiRuntime`, `TaigiEngine`, `TaigiReply`, `TaigiMenu`), each with a matching `*_free`, accessors instead of shared structs. This is the §4 pattern.
 - **Windows TSF DLL** — every COM entry runs through `windows/crates/taigi-windows-tsf/src/com_guard.rs` (`guarded` / `guarded_hresult`), which turns a panic into `E_FAIL` plus one log line.
@@ -26,7 +26,7 @@ Every exported function (`#[no_mangle]` / `extern "system"` / `#[swift_bridge::b
 
 ### 1.3 Thread safety — `Mutex<Engine>`, never raw pointer + `&mut`
 
-Engine state is `Send + !Sync`; the platform may call concurrently (IME thread, settings push, background refresh). The singleton holds `Mutex<Engine>` and locks it per request — platforms never receive a raw `*mut Engine`, and casting back via `&mut *(ptr as *mut Engine)` is forbidden. `RwLock` is not part of the contract. Failure mode blocked: khiin-rs casts the raw pointer back to `&mut Engine` with no synchronization (`references/khiin-rs/android/rust/src/lib.rs:64`, `references/khiin-rs/swift/bridge/src/lib.rs:51-52`), so two platform calls can alias one `&mut`.
+Engine state is `Send + !Sync`; the platform may call concurrently (IME thread, settings push, background refresh). Each stateful crate's singleton holds `Mutex<Engine>` (`composing`, `nextword`) or, for the read-mostly lexicon, `RwLock` (`engine/lexicon/src/handle.rs`: `install` the only writer) and locks it per request — platforms never receive a raw `*mut Engine`, and casting back via `&mut *(ptr as *mut Engine)` is forbidden. Failure mode blocked: khiin-rs casts the raw pointer back to `&mut Engine` with no synchronization (`references/khiin-rs/android/rust/src/lib.rs:64`, `references/khiin-rs/swift/bridge/src/lib.rs:51-52`), so two platform calls can alias one `&mut`.
 
 ### 1.4 Request size cap
 
@@ -69,7 +69,6 @@ pub mod api;        // tests + CLI hit phonetics::api::*
 pub mod requests;   // engine/dispatch routes through phonetics::requests::handle
 
 pub mod case_transform; // cross-crate case helpers (composing re-cases candidates)
-mod case_tables;
 mod derivation;
 mod normalization;
 mod syllable;
@@ -81,7 +80,7 @@ mod syllable;
 | Layer | Type vocabulary | Visibility |
 |---|---|---|
 | `phonetics`, `lexicon`, `composing`, `nextword`, `userdata` (domain) | **Request façade** (`requests.rs`) takes / returns `protos::engine::*` directly. Native-Rust helpers (CLI / test convenience functions) may exist alongside but never grow into a parallel mirror tier. | Implementation modules `mod`-private; one or two `pub mod` façades; `pub use` only for genuine cross-crate symbols. |
-| `engine/dispatch` | Single `process_request(&[u8]) -> Vec<u8>`. Decodes once, routes by `Request.payload` variant to the matching domain crate, encodes once. | Pure routing — no proto↔proto translation, except cross-domain composition only `dispatch` can do (`predict.rs` expands nextword `PredictNext` with a lexicon lookup into `FilterPredictions`; `user_data/with_stores.rs` feeds the `userdata` stores' rows into `composing` / `nextword` / `lexicon` requests). |
+| `engine/dispatch` | Single `process_request(&[u8]) -> Vec<u8>`. Decodes once, routes by `Request.payload` variant to the matching domain crate, encodes once. | Pure routing — no proto↔proto translation, except cross-domain composition only `dispatch` can do (`predict.rs` expands nextword `PredictNext` with a lexicon lookup into `FilterPredictions`; `next_word_handshake.rs` turns a composing response's next-word effects into `NextWordRequest`s in the same call; `fetch.rs` + `context.rs` rank a `FetchAtPos` with the user rows and the bundled previous-word context; `user_data/with_stores.rs` feeds the `userdata` stores' rows into `composing` / `nextword` / `lexicon` requests). |
 | `swift-ffi`, `android-jni` | Bytes in, bytes out across the FFI seam. `catch_unwind` per §1.2. | Calls `dispatch::process_request` directly. |
 
 **What this rule excludes.** Native-Rust input/output structs that mirror proto messages, `From<NativeFoo> for protos::engine::Foo` impls, separate per-op entry points in dispatch (`dispatch::process_phonetics`, `dispatch::process_ranking`, …) — all banned. They show up in candidate refactors and they are always extra work for no end-user benefit.

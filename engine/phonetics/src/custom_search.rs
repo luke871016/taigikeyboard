@@ -21,13 +21,14 @@
 
 use crate::api::{
     contains_tps, parse_input_mode, poj_display_to_tl_display, tl_display_to_poj_display,
-    to_tone_number, InputMode,
+    tl_display_to_tps, to_tone_number, tone_digits_to_marks, InputMode,
 };
 use crate::derivation::{derive_abbrev, derive_notone};
+use crate::display_rewrite::tl_display_keeping_tl_finals;
 use crate::key_family::KeyFamily;
 use crate::tps::{
-    from_zhuyin, is_tps_tone_mark, normalize_tps_lookup_scalar, tps_abbrev_from_tl,
-    tps_notone_from_tl, tps_notone_or_variant, tps_num_from_tl,
+    from_zhuyin, is_tps_tone_mark, normalize_tps_lookup_scalar, tl_syllable_tokens,
+    tps_abbrev_from_tl, tps_notone_from_tl, tps_notone_or_variant, tps_num_from_tl,
 };
 use std::collections::HashSet;
 
@@ -57,15 +58,16 @@ pub fn derive_custom_search_keys(roman: &str) -> Vec<CustomSearchKey> {
     let mut keys = Vec::new();
     push_latin_family(&mut keys, KeyFamily::Tl, &tl);
     push_latin_family(&mut keys, KeyFamily::Poj, &poj);
-    push_tps_family(&mut keys, &tl);
+    push_tps_family(&mut keys, &without_number_tokens(&tl));
     dedup_nonempty(keys)
 }
 
-/// The TL reading every search key of a stored custom-dictionary roman is
-/// derived from — the mode-independent surface the engine also measures a
+/// The TL reading the TL / POJ search keys of a stored custom-dictionary
+/// roman are derived from, and the surface the engine measures a TL / POJ
 /// custom entry's syllables on, so a row the store matched is judged on the
-/// same reading. A Bopomofo dirty-row (the DB schema does not forbid one)
-/// folds via `from_zhuyin`; a POJ / TL latin display folds via
+/// same reading (TPS reads [`custom_tps_reading`]). A Bopomofo dirty-row (the
+/// DB schema does not forbid one) folds via `from_zhuyin`; a POJ / TL latin
+/// display folds via
 /// `poj_display_to_tl_display` (identity for TL input — it only rewrites
 /// ch→ts / oa→ua etc.).
 pub fn custom_search_reading(roman: &str) -> String {
@@ -74,6 +76,77 @@ pub fn custom_search_reading(roman: &str) -> String {
     } else {
         poj_display_to_tl_display(roman)
     }
+}
+
+/// [`custom_search_reading`] as TPS measures it: without its number tokens,
+/// which Bopomofo cannot spell (`Tâi-gí 2` → `Tâi-gí`). The TPS search keys,
+/// and the engine's TPS reach, tone pin and walker edge key of a custom entry,
+/// all read this one surface, so a row the store matched is judged on it.
+pub fn custom_tps_reading(roman: &str) -> String {
+    without_number_tokens(&custom_search_reading(roman))
+}
+
+/// `reading` minus its number tokens, syllables hyphen-joined. Every TPS
+/// consumer splits on the syllable separators first, so the kept separator
+/// kind does not matter; a reading with no number token comes back unchanged.
+fn without_number_tokens(reading: &str) -> String {
+    if !tl_syllable_tokens(reading).any(is_number_token) {
+        return reading.to_owned();
+    }
+    tl_syllable_tokens(reading)
+        .filter(|token| !is_number_token(token))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// A stored custom-dictionary roman as the Custom Dictionary list shows it
+/// in `mode`, whichever spelling was saved. English shows the saved
+/// spelling. TL and TPS read a Latin roman as TL (as `stored_roman_mode` does), so
+/// a TL special final stays (`téng`, as [`canonical_tl_form`] keeps it); POJ
+/// reads it as POJ. A token that is not a syllable stays as written in TL /
+/// POJ; TPS, which cannot spell it (`iPhone`, a stop syllable in a non-stop
+/// tone), shows the whole saved spelling.
+///
+/// [`canonical_tl_form`]: crate::api::canonical_tl_form
+pub fn custom_display_roman(roman: &str, mode: InputMode, or_maps_to_er: bool) -> String {
+    let is_bopomofo = contains_tps(roman);
+    let reading = || {
+        let reading = if is_bopomofo {
+            from_zhuyin(roman)
+        } else if mode == InputMode::Poj {
+            poj_display_to_tl_display(roman)
+        } else {
+            tl_display_keeping_tl_finals(roman)
+        };
+        // A Bopomofo row folds to numeric TL (`thai5`); the list shows marks.
+        tone_digits_to_marks(&reading)
+    };
+    match mode {
+        InputMode::English => roman.to_owned(),
+        InputMode::Tps if is_bopomofo => roman.to_owned(),
+        InputMode::Tl => reading(),
+        InputMode::Poj => tl_display_to_poj_display(&reading()),
+        InputMode::Tps => {
+            if tl_syllable_tokens(roman).any(is_number_token) {
+                return roman.to_owned();
+            }
+            let tps = tl_display_to_tps(&reading(), or_maps_to_er);
+            // Latin left over is a token Bopomofo could not spell.
+            if tps.chars().any(|c| c.is_ascii_alphanumeric()) {
+                roman.to_owned()
+            } else {
+                tps
+            }
+        }
+    }
+}
+
+/// A token with a digit and no letter (`2`, `2.`, `101`) is no syllable. TPS
+/// conversion would read its lone digit as a tone and leave a bare mark
+/// (`2` → `ˋ`), so the TPS search keys skip it and the TPS list shows the
+/// whole saved spelling.
+fn is_number_token(token: &str) -> bool {
+    token.chars().any(|c| c.is_ascii_digit()) && !token.chars().any(char::is_alphabetic)
 }
 
 /// READ side — single family-native key for the current input + mode. `None`
@@ -122,19 +195,25 @@ pub fn derive_custom_query_key(input: &str, input_mode: &str) -> Option<CustomSe
     })
 }
 
-/// READ side — the stored `tps:notone` key a toneless TPS walker edge body
-/// (`ㄉㄢㄙㆩ`) equals. The body is already the fused toneless face the
-/// write side stores (`tps_notone_from_tl`, plus its ㄜ→ㄛ variant row), so
-/// it is matched whole, never as a prefix.
-pub fn tps_toneless_edge_key(body: &str) -> CustomSearchKey {
+/// READ side — the stored `notone` key a toneless walker edge body of
+/// `mode`'s family equals, matched whole, never as a prefix. A TPS body
+/// (`ㄉㄢㄙㆩ`) is already the fused toneless face the write side stores
+/// (`tps_notone_from_tl`, plus its ㄜ→ㄛ variant row); a TL / POJ body
+/// (`mtsaiiann`, `chiah`) folds through the same [`derive_notone`] the write
+/// side's `tl:` / `poj:` `notone` keys do. English reads as TL, as
+/// [`derive_custom_query_key`] does.
+pub fn toneless_edge_key(body: &str, mode: InputMode) -> CustomSearchKey {
+    let (family, key) = match mode {
+        InputMode::Tps => (KeyFamily::Tps, body.to_owned()),
+        InputMode::Poj => (KeyFamily::Poj, derive_notone(body)),
+        InputMode::Tl | InputMode::English => (KeyFamily::Tl, derive_notone(body)),
+    };
     CustomSearchKey {
-        family: KeyFamily::Tps.tag(),
+        family: family.tag(),
         form: FORM_NOTONE,
-        key: body.to_owned(),
+        key,
     }
 }
-
-// ---- WRITE helpers ------------------------------------------------------
 
 fn push_latin_family(keys: &mut Vec<CustomSearchKey>, family: KeyFamily, display: &str) {
     push_key(
@@ -189,8 +268,6 @@ fn dedup_nonempty(keys: Vec<CustomSearchKey>) -> Vec<CustomSearchKey> {
         .filter(|k| seen.insert((k.family, k.form, k.key.clone())))
         .collect()
 }
-
-// ---- Shared key shaping -------------------------------------------------
 
 /// Lowercase a latin numeric form, take its base form, and drop hyphen +
 /// space so it fuses to the stored `*:num` key shape (e.g. `guá-sī` →
@@ -271,6 +348,29 @@ mod tests {
             query_hits_stored(&stored, &q_poj),
             "POJ query must find POJ-stored entry"
         );
+    }
+
+    // trace: a number token is no syllable, so the TPS keys skip it rather than
+    // read the digit as a tone. "Tâi-gí 2": tâi = t ㄉ ai ㄞ 5 ˊ, gí = g ㆣ i ㄧ 2 ˋ
+    // → num "ㄉㄞˊㆣㄧˋ" (not "ㄉㄞˊㆣㄧˋˋ"), notone "ㄉㄞㆣㄧ", abbrev "ㄉㆣ".
+    // "Tâi-uân 101": uân = u ㄨ an ㄢ 5 ˊ → notone "ㄉㄞㄨㄢ" (not "ㄉㄞㄨㄢ01").
+    // "2" and "7-11" leave no TPS key, so a lone `ˋ` query does not find "2".
+    #[test]
+    fn tps_keys_skip_a_number_token() {
+        let stored = derive_custom_search_keys("Tâi-gí 2");
+        assert!(has(&stored, "tps", FORM_NUM, "ㄉㄞˊㆣㄧˋ"));
+        assert!(has(&stored, "tps", FORM_NOTONE, "ㄉㄞㆣㄧ"));
+        assert!(has(&stored, "tps", FORM_ABBREV, "ㄉㆣ"));
+        assert!(!has(&stored, "tps", FORM_NUM, "ㄉㄞˊㆣㄧˋˋ"));
+
+        let stored = derive_custom_search_keys("Tâi-uân 101");
+        assert!(has(&stored, "tps", FORM_NOTONE, "ㄉㄞㄨㄢ"));
+        assert!(!has(&stored, "tps", FORM_NOTONE, "ㄉㄞㄨㄢ01"));
+
+        for saved in ["2", "7-11"] {
+            let stored = derive_custom_search_keys(saved);
+            assert!(stored.iter().all(|k| k.family != "tps"), "{saved}");
+        }
     }
 
     // trace: roman="tsiah" (TL). canonical TL = "tsiah"; poj = "chiah".
@@ -482,5 +582,125 @@ mod tests {
                 k.key
             );
         }
+    }
+
+    // trace: TL-saved "tsuí-ông-tshut", POJ-saved "chúi-ông-chhut" and numeric
+    // "tsui2-ong5-tshut" share the reading "tsuí-ông-tshut" (custom_search_reading,
+    // then tone_digits_to_marks). POJ: ts→ch, tsh→chh, uí→úi. TPS (tps.rs tables):
+    // ts=ㄗ ui=ㄨㄧ 2=ˋ · ong=ㆲ 5=ˊ · tsh=ㄘ ut=ㄨㆵ (t4), syllables space-joined.
+    #[test]
+    fn display_roman_renders_any_saved_spelling_in_the_mode() {
+        for saved in ["tsuí-ông-tshut", "chúi-ông-chhut", "tsui2-ong5-tshut"] {
+            assert_eq!(
+                custom_display_roman(saved, InputMode::Tl, true),
+                "tsuí-ông-tshut"
+            );
+            assert_eq!(
+                custom_display_roman(saved, InputMode::Poj, true),
+                "chúi-ông-chhut"
+            );
+            assert_eq!(
+                custom_display_roman(saved, InputMode::Tps, true),
+                "ㄗㄨㄧˋ ㆲˊ ㄘㄨㆵ"
+            );
+            assert_eq!(custom_display_roman(saved, InputMode::English, true), saved);
+        }
+    }
+
+    // trace: multi-word "tâi-uân lâng" → POJ uân→oân; khinsiann "lâi--khì" → TPS
+    // marks the syllable after `--` with ˙ (tl_numeric_to_tps), khì = kh ㄎ + i ㄧ + 3 ˪.
+    #[test]
+    fn display_roman_keeps_word_and_khinsiann_boundaries() {
+        assert_eq!(
+            custom_display_roman("tâi-uân lâng", InputMode::Poj, true),
+            "tâi-oân lâng"
+        );
+        assert_eq!(
+            custom_display_roman("lâi--khì", InputMode::Poj, true),
+            "lâi--khì"
+        );
+        assert_eq!(
+            custom_display_roman("lâi--khì", InputMode::Tps, true),
+            "ㄌㄞˊ ˙ㄎㄧ˪"
+        );
+    }
+
+    // trace: "khór" = kh ㄎ + or + 2 ˋ; `or` is ㄜ with or→er on, ㄛ off (tps.rs:622).
+    #[test]
+    fn display_roman_tps_follows_the_or_dialect_flag() {
+        assert_eq!(custom_display_roman("khór", InputMode::Tps, true), "ㄎㄜˋ");
+        assert_eq!(custom_display_roman("khór", InputMode::Tps, false), "ㄎㄛˋ");
+    }
+
+    // A token that is not a syllable stays as saved: TL / POJ keep it in place,
+    // TPS (which cannot spell it) shows the whole saved spelling.
+    #[test]
+    fn display_roman_keeps_a_non_syllable_as_saved() {
+        for saved in ["iPhone", "tsuiongtshut"] {
+            for mode in [InputMode::Tl, InputMode::Poj, InputMode::Tps] {
+                assert_eq!(custom_display_roman(saved, mode, true), saved, "{mode:?}");
+            }
+        }
+    }
+
+    // trace: Bopomofo dirty row "ㄊㄞˊ" folds via from_zhuyin to "thai5"; the TL
+    // list shows marks ("thâi"), TPS shows the saved Bopomofo.
+    #[test]
+    fn display_roman_of_a_bopomofo_row() {
+        assert_eq!(custom_display_roman("ㄊㄞˊ", InputMode::Tl, true), "thâi");
+        assert_eq!(custom_display_roman("ㄊㄞˊ", InputMode::Poj, true), "thâi");
+        assert_eq!(custom_display_roman("ㄊㄞˊ", InputMode::Tps, true), "ㄊㄞˊ");
+    }
+
+    // A stop syllable in a non-stop tone (`páh`, tone 2) has no TPS tone
+    // (`tps.rs` ZHUYIN_TONES: p/t/k/h only with 4 / 8), so TPS shows the saved
+    // spelling rather than `ㄅㄚh2`; a mixed row likewise.
+    #[test]
+    fn display_roman_tps_keeps_what_bopomofo_cannot_spell() {
+        for saved in ["páh", "iPhone tsin hó"] {
+            assert_eq!(custom_display_roman(saved, InputMode::Tps, true), saved);
+        }
+    }
+
+    // A standalone number is not a syllable: `tl_display_to_tps` would read a
+    // lone digit as a tone and leave a bare mark (`"2"` → `ˋ`), so TPS shows the
+    // saved spelling, as it does for `7-11` and `101`.
+    #[test]
+    fn display_roman_tps_keeps_a_standalone_number() {
+        for saved in [
+            "2",
+            "tsit 2",
+            "Tâi-gí 2",
+            "tsi̍t-pah 5",
+            "tsit-2",
+            "tsit 2.",
+            "7-11",
+            "Tâi-uân 101",
+        ] {
+            assert_eq!(custom_display_roman(saved, InputMode::Tps, true), saved);
+        }
+    }
+
+    // trace: a digit-free symbol token stays in place and the syllables still
+    // convert: tâi = t ㄉ ai ㄞ 5 ˊ, gí = g ㆣ i ㄧ 2 ˋ, `!` passes through.
+    #[test]
+    fn display_roman_tps_converts_around_a_symbol_token() {
+        assert_eq!(
+            custom_display_roman("tâi-gí !", InputMode::Tps, true),
+            "ㄉㄞˊ ㆣㄧˋ !"
+        );
+    }
+
+    // trace: TL special final `eng` [ɛŋ] (reference §3.2.6) stays in TL, as
+    // canonical_tl_form keeps it; TPS: t=ㄉ eng=ㆤㆭ 2=ˋ. POJ reads the same
+    // letters as POJ `eng` (TL `ing`), which POJ spells `téng` too.
+    #[test]
+    fn display_roman_keeps_a_tl_special_final_in_tl() {
+        assert_eq!(custom_display_roman("téng", InputMode::Tl, true), "téng");
+        assert_eq!(
+            custom_display_roman("téng", InputMode::Tps, true),
+            "ㄉㆤㆭˋ"
+        );
+        assert_eq!(custom_display_roman("téng", InputMode::Poj, true), "téng");
     }
 }

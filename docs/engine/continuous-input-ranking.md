@@ -16,13 +16,13 @@ One `FetchAtPos` is answered by `composing::continuous::assemble_candidates` ([`
 | 1 | Syllabify the pending `raw` and build the left-anchored FST keys (all modes: TL / POJ / TPS / English) | `shadow::build_continuous_keys` |
 | 2 | No key → whole-buffer partial-prefix scan; else span-local exact fetch per key | `fetch_via_lexicon_partial_inner` / `lexicon::fetch_candidates_for_keys_with_barriers` |
 | 3 | Recase each candidate's `roman` to the user's typed segment | `recase_roman` |
-| 4 | Prepend the whole-sentence walker's best path at slot 0. A path of several words is not sort-compared (only step 4d's picked extension can displace it); a one-word path joins the step 4d sort like any other row (a word picked through the abbreviation `kip` can pass 級), then step 4d's post-pass places it | `fetch_walker_slot0_inner` |
+| 4 | Prepend the whole-sentence walker's best path at slot 0. A path of several words is not sort-compared (only step 4d's picked extension can displace it); a one-word path joins the step 4d sort like any other row (a word picked through the abbreviation `kip` can pass 級), then step 4d's post-pass places it | `synth_cut` → `walker_slot0` |
 | 4b | Whole-input prefix-extension scan (`COVERAGE_KIND_PARTIAL_PREFIX`) | `fetch_via_lexicon_partial_inner` |
 | 4c | Whole-buffer abbreviation lookup | `continuous/assemble.rs` Step 4c |
 | 4d | Re-sort the merged blocks by `CandidateSortKey`, keeping a slot 0 of several words in place; a picked multi-syllable partial prefix covering the whole input then swaps above a slot 0 composed from several edges that is not itself a dictionary word (`antsua` → 按怎 over 安紙). The walker has no edge past the input. A dictionary word that is several edges keeps slot 0 (`hoogua` → 予我), and so does a sentence against a one-syllable pick, which is keyed by reading, not by what was typed. Post-pass, for the same reason: the picks the sort put directly before a one-word path form a run, which a never-picked row ends. The run's one-syllable prefix picks move behind the path in their own order (`sia` → 寫 before a picked 仙); its other picks stay ahead (`anko` → a picked 按講 before 安哥; `ia` → a picked 以後 `í-āu`, 也, a picked 抑 `ia̍h`). A never-picked custom word directly before the path leaves the run empty (`ko` → a picked 講, a custom 姑, 哥) | `ranking::sort_by_candidate_key`, `picked_extension_outranks_sentence`, `lead_one_syllable_prefix_picks` |
 | 5 | POJ mode only: render `roman` as POJ, then dedupe the rendered list | `recase_tl_as_poj_display`, `dedupe_rendered_continuous` |
 
-The dispatch caller runs the fetch twice: a neutral pass discovers the candidates, then their `user_frequency.db` rows are read and the fetch re-runs ranked (`engine/dispatch/src/fetch.rs` `fetch_at_pos` / `candidate_frequency`). No platform sends frequency rows.
+The dispatch caller runs the fetch twice: a neutral pass discovers the candidates, then their `user_frequency.db` rows — and those of every word the sentence walk could write on an edge (`composing::requests::walker_edge_words`) — are read and the fetch re-runs ranked (`engine/dispatch/src/fetch.rs` `fetch_at_pos` / `candidate_frequency`). No platform sends frequency rows.
 
 ---
 
@@ -67,7 +67,7 @@ The cap is applied **before** the decay, so a huge stale count is not pinned hig
 | `FrequencyData { count: i32, last_used_ms: i64 }`, `FrequencyMap`, `user_freq_boost`, `decayed_user_weight_delta` | `engine/ranking/src/score.rs` |
 | `FrequencyMap` key | the `(display_text, canonical_tl)` pair (Core Principle #6); `get` falls back to the legacy `(display_text, "")` bucket, never sums |
 | Store | `user_frequency.db`, `UNIQUE(word, tl)` — `engine/userdata` `UserFrequencyStore` (`rows_for_words`) |
-| Write | `UserDataStores::record_usage` (`engine/userdata/src/stores.rs`): count + 1 and `last_used` = now for the pair; a Hanji pick also touches its learned phrase. A `CommitContinuous` is recorded by the engine itself; a platform `RecordUsage` covers other picks |
+| Write | `UserDataStores::record_usage` (`engine/userdata/src/stores.rs`): count + 1 and `last_used` = now for the pair; a Hanji pick also touches its learned phrase. The engine records every pick itself (`CommitContinuous`, `CommitPrediction`) |
 | Read | `fetch.rs` `candidate_frequency` → `ContinuousFetchCtx.freq_map` + `now_ms` |
 | Sort | `ranking::sort_by_candidate_key`, called from `engine/lexicon/src/continuous/` and Step 4d |
 
@@ -86,7 +86,7 @@ into the engine. The edge provider and selected-word cap use that same price.
 - **User preference**: `applied_δ` is the edge word's `user_weight`, scaled to 0 on single-syllable edges (`WALKER_SINGLE_SYLLABLE_USER_DELTA_SCALE`) so a hot single character cannot sweep the sentence. A selected multi-syllable word's base cost is capped by `user_entry_cost_cap`.
 - **User rows**: an edge with a custom or learned row under its key is priced at most at the loaded dictionary model's custom-word cost (the key's dictionary cost, walker-bigram penalty included, when cheaper).
 - **OOV edge** (no dictionary hit): `OOV_PER_CHAR_PENALTY (1e10) × toneless_len`, so a dictionary-coverable buffer never collapses to an OOV blob.
-- The edge's word is picked by `CandidateSortKey` among the key's homophones; the walker and its carve-out live in `continuous::fetch_walker_slot0_inner` (`engine/composing/src/continuous/walk.rs`).
+- The edge's word is picked by `CandidateSortKey` among the key's homophones; the walk lives in `continuous::walk_buffer`, the slot-0 decision and its carve-out in `continuous::synth_cut` (`engine/composing/src/continuous/walk.rs`).
 
 ---
 

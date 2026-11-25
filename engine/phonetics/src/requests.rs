@@ -1,22 +1,10 @@
 //! Phonetics request dispatcher — routes `PhoneticsRequest.method` variants
-//! to the corresponding implementation. All variants live behind a single FFI
-//! entry per `docs/engine/rust-core-proto.md` §3 and the architectural
-//! convergence doc with khiin-rs / McBopomofo.
-//!
-//! Helpers are split across submodules:
-//! - This file owns the dispatch + result-shape construction.
-//! - `normalization` owns the InputNormalizer port (NFD / combining-mark
-//!   mechanics).
-//! - `punctuation`, `double_space` and `external_lookup` hold the platform
-//!   text helpers.
-//! - `tps_adjust` owns the TPSAdjustmentBundle port (collapsed entry).
-//! - `tone_variations` owns the GetToneVariations init-pull table builder.
-//! - `case_requests` owns the `CaseRequest` handler, re-exported here as
-//!   `handle_case`.
-//! - `api`, `syllable`, `tps`, `poj`, `tl`, `tables` provide the
-//!   foundational helpers reused here.
+//! to their implementations (`tone_variations`, the `punctuation` predicates
+//! via `api`, `double_space`, `external_lookup`) behind the single FFI entry
+//! (`docs/engine/rust-core-proto.md` §3). `case_requests` owns the
+//! `CaseRequest` handler, re-exported here as `handle_case`.
 
-use crate::api::{tl_display_to_poj_display, tl_display_to_tps, PhoneticsError};
+use crate::api::PhoneticsError;
 use crate::tone_variations;
 use protos::engine::phonetics_request::Method;
 use protos::engine::phonetics_response::Result as PhonResult;
@@ -40,18 +28,8 @@ pub fn handle(req: &PhoneticsRequest) -> Result<PhoneticsResponse, PhoneticsErro
     };
 
     let result = match method {
-        // --- Phonetics core ---
-        Method::TlToPoj(payload) => PhonResult::StringResult(StringResult {
-            output: tl_display_to_poj_display(&payload.input),
-        }),
         Method::GetToneVariations(_) => PhonResult::ToneVariationsResult(tone_variations::build()),
 
-        // --- TPS ---
-        Method::TlDisplayToTps(payload) => PhonResult::StringResult(StringResult {
-            output: tl_display_to_tps(&payload.text, payload.or_maps_to_er),
-        }),
-
-        // --- Platform text helpers ---
         Method::IsAttachingPunctuation(payload) => PhonResult::BoolResult(BoolResult {
             value: crate::api::is_attaching_punctuation(&payload.text),
         }),

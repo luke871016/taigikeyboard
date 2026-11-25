@@ -27,15 +27,12 @@ fn effect_kinds(resp: &ComposingResponse) -> Vec<&'static str> {
             EffectKind::ClearCandidates(_) => "clearCandidates",
             EffectKind::RefreshCandidates(_) => "refreshCandidates",
             EffectKind::ResetCandidateContext(_) => "resetCandidateContext",
-            EffectKind::NextWordUpdateLastSelectedWord(_) => "nextWordUpdateLastSelectedWord",
             EffectKind::NextWordWordSelected(_) => "nextWordWordSelected",
             EffectKind::NextWordClearForNewComposing(_) => "nextWordClearForNewComposing",
             EffectKind::NextWordDecided(_) => "nextWordDecided",
         })
         .collect()
 }
-
-// ---- Initial state ----
 
 #[test]
 fn invariant_initial_state_is_idle() {
@@ -44,8 +41,6 @@ fn invariant_initial_state_is_idle() {
     assert!(!snap.is_composing);
     assert_eq!(snap.preedit.unwrap_or_default().raw_input, "");
 }
-
-// ---- Start / Append effect ordering ----
 
 #[test]
 fn invariant_start_emits_update_preedit_then_refresh_candidates() {
@@ -86,8 +81,6 @@ fn invariant_append_hyphen_appends_literal_dash() {
     assert_eq!(raw_input(&resp), "a-");
 }
 
-// ---- DeleteBackward ----
-
 #[test]
 fn invariant_delete_backward_to_empty_aborts_without_touching_the_document() {
     // The char only ever lived in the marked region: backspace to empty is
@@ -122,16 +115,12 @@ fn invariant_delete_backward_idle_is_noop() {
     assert!(resp.effect.is_empty());
 }
 
-// ---- CommitRaw ----
-
 #[test]
 fn invariant_commit_raw_idle_is_noop() {
     let mut engine = Engine::new();
     let resp = engine.apply(Intent::CommitRaw, &config_tl());
     assert!(resp.effect.is_empty());
 }
-
-// ---- CommitPreeditThenInsertExternal ----
 
 #[test]
 fn invariant_commit_preedit_then_insert_in_composing_concatenates() {
@@ -172,8 +161,6 @@ fn invariant_commit_preedit_then_insert_empty_external_is_noop() {
     assert!(resp.effect.is_empty());
 }
 
-// ---- Reset ----
-
 // INVARIANT_COMPOSING_IDLE_TO_IDLE_IS_NOOP (behavioral-invariants.md §13)
 #[test]
 fn invariant_reset_idle_is_noop() {
@@ -181,8 +168,6 @@ fn invariant_reset_idle_is_noop() {
     let resp = engine.apply(Intent::Reset, &config_tl());
     assert!(resp.effect.is_empty());
 }
-
-// ---- Snapshot ----
 
 #[test]
 fn invariant_snapshot_does_not_mutate() {
@@ -194,8 +179,6 @@ fn invariant_snapshot_does_not_mutate() {
     assert_eq!(snap_a.preedit.unwrap().raw_input, "abc");
     assert_eq!(snap_b.preedit.unwrap().raw_input, "abc");
 }
-
-// ---- Phase invariants ----
 
 #[test]
 fn invariant_idle_implies_empty_raw() {
@@ -225,8 +208,6 @@ fn invariant_is_composing_matches_phase_after_every_response() {
     let r4 = engine.apply(Intent::Reset, &config_tl());
     assert!(!r4.is_composing);
 }
-
-// ---- Multi-step sequences ----
 
 #[test]
 fn invariant_start_append_append_buffer_grows() {

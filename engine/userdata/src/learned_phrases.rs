@@ -54,7 +54,7 @@ impl LearnedPhraseStore {
     /// Android `LearnedPhraseService.MAX_ENTRIES`.
     pub const MAX_ENTRIES: usize = 2_000;
     /// Largest `learn_count` a row can carry.
-    pub const MAX_LEARN_COUNT: i64 = 1_000_000;
+    const MAX_LEARN_COUNT: i64 = 1_000_000;
     /// Rows per fetch (exact whole-buffer match; homophone phrases).
     pub const KEYSTROKE_LIMIT: usize = 5;
 
@@ -220,7 +220,7 @@ impl LearnedPhraseStore {
     }
 
     /// [`rows_matching`](Self::rows_matching) for each of `query_keys` — a
-    /// TPS walk's edge bodies — each phrase once, in one read: the store
+    /// walk's edge bodies — each phrase once, in one read: the store
     /// answers every key or none.
     pub fn rows_matching_any(
         &self,

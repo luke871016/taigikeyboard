@@ -96,7 +96,7 @@ pub(super) fn merge_custom_dedupe_sort(
     // the default rank), so a learned pair that the dictionary also carries
     // is listed once, from the dictionary.
     for entry in ctx.learned {
-        if !ctx.tone_pin.admits(None, &entry.canonical_tl) {
+        if !ctx.tone_pin.admits_learned(&entry.canonical_tl, ctx.mode) {
             continue;
         }
         out.push(learned_entry_to_candidate(
@@ -109,6 +109,9 @@ pub(super) fn merge_custom_dedupe_sort(
         ));
     }
     dedupe_by_roman_hanji_span(&mut out, ctx.khinsiann_in_hanji);
+    // Hàn-Lô lām: every word's romanization, the user's words included; a
+    // romanization-only row already listed answers its reading.
+    super::han_lo::add_roman_twins(&mut out, ctx);
     sort_by_candidate_key(out, raw_len, RawCandidate::rank_facts)
 }
 

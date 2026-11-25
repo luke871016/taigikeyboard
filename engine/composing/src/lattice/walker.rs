@@ -22,8 +22,8 @@
 //!
 //! The walker is **pure and shadow-space native**. It never looks at
 //! the dictionary, the raw byte space, or proto types: the caller
-//! (`continuous::fetch_walker_slot0_inner`, which holds `LexiconHandle`
-//! state) injects an `edge_choice` provider that maps a shadow edge
+//! (`continuous::walk_buffer`, run inside `assemble_candidates`'s
+//! `LexiconHandle` scope) injects an `edge_choice` provider that maps a shadow edge
 //! `(start, end)` to its best content. This keeps the
 //! composing↔lexicon boundary clean and reuses the lexicon candidate
 //! construction instead of duplicating it (Codex pre-impl S2 Q1b).
@@ -71,6 +71,12 @@ pub(crate) struct EdgeChoice {
     /// `(Hanji, canonical-TL)` identity (`AGENTS.md` Core Principle 6). Empty
     /// for a synthesized OOV edge, which has none.
     pub canonical_tl: String,
+    /// The chosen word's stored identity text (`RawCandidate.display_text`):
+    /// its Hanji as stored — a learned Han-Lo phrase in TL even when its
+    /// shown `hanji` is POJ — or its canonical TL for a romanization word.
+    /// Empty for a synthesized OOV edge. The slot-0 identity is joined from
+    /// these, so it does not change with the input mode.
+    pub display_text: String,
     /// `true` iff this edge resolved to a **lexicon-backed hit**: a
     /// `dict.bin` record (provider `Some(c)` branch) or a
     /// `custom_dictionary.db` entry (v3.5.8 S6 custom-precedence
@@ -120,7 +126,7 @@ pub(crate) struct EdgeChoice {
     /// v3.5.8 S3 — time-decayed user-frequency boost delta for this
     /// edge's chosen candidate (`ranking::decayed_user_weight_delta`,
     /// `0.0..=4.0`). `0.0` for a no-dict edge or one with no user
-    /// history. Computed caller-side in `continuous::fetch_walker_slot0_inner`
+    /// history. Computed caller-side in `continuous::walk_buffer`
     /// so the walker stays pure and shadow-space native (Codex pre-impl
     /// S3 Q4d seam). Applied as a log-space cost discount in
     /// [`edge_cost`] (Codex pre-impl S5 Q3). Closes Continuous-input
@@ -175,7 +181,7 @@ pub(crate) struct BestPath {
 /// sorted, so this is deterministic. No edge-count tiebreak: the S2
 /// "more edges wins" lever existed only to force the no-dict
 /// per-syllable split, which S5 moves to the explicit
-/// `continuous::fetch_walker_slot0_inner` carve-out — keeping it here would
+/// `continuous::synth_cut` carve-out — keeping it here would
 /// re-introduce the over-segmentation pressure min-cost exists to
 /// remove (Codex pre-impl S5 Q5, 2026-05-17).
 pub(crate) fn walk_best<B: WalkerBigram>(
@@ -333,6 +339,7 @@ mod tests {
             roman: roman.to_owned(),
             hanji: Some(hanji.to_owned()),
             canonical_tl: roman.to_owned(),
+            display_text: hanji.to_owned(),
             dict_hit: true,
             is_custom: false,
             walker_cost,
@@ -357,6 +364,7 @@ mod tests {
             roman: r.to_owned(),
             hanji: None,
             canonical_tl: String::new(),
+            display_text: String::new(),
             dict_hit: false,
             is_custom: false,
             walker_cost: 0,
@@ -375,6 +383,7 @@ mod tests {
             roman: roman.to_owned(),
             hanji: Some(hanji.to_owned()),
             canonical_tl: roman.to_owned(),
+            display_text: hanji.to_owned(),
             dict_hit: true,
             is_custom: true,
             walker_cost,
@@ -458,7 +467,7 @@ mod tests {
         // reached directly from 0 before the (6,9) relaxation — is
         // kept. The user-facing per-syllable romanization is NOT
         // produced here; it is the explicit
-        // `continuous::fetch_walker_slot0_inner` carve-out (Codex pre-impl S5
+        // `continuous::synth_cut` carve-out (Codex pre-impl S5
         // Q2). This pins that an all-OOV buffer still resolves to the
         // fewest-edge blob (which the carve-out then renders
         // per-syllable) under the RC0 BIG-per-char model.
@@ -485,7 +494,7 @@ mod tests {
         // Under RC0 the blob costs
         // `8 * OOV_PER_CHAR_PENALTY ≈ 8e10`, dwarfing the `ln`-scale
         // dict path, so the walker picks the dict path → `any dict_hit`
-        // true → `continuous::fetch_walker_slot0_inner` renders hanji, never
+        // true → `continuous::walker_slot0` renders hanji, never
         // bare `"tai uan ta"`.
         let lat = lattice(vec![(0, 6), (0, 8), (6, 8)]);
         let path = walk(&lat, 8, |s, e| match (s, e) {

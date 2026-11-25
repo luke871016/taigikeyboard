@@ -22,7 +22,7 @@
 | `id` | String (UUID) | Unique identifier |
 | `roman` | String | Romanization in the user's native form (TL or POJ display, whichever the user typed when saving). The engine treats it raw on the lattice axis; the freq-key commit value is canonicalized to TL (`phonetics::api::canonical_tl_form`). |
 | `hanzi` | String | The Hanji (Han-Lo spellings such as `白phau-phau` included); empty for a word written only in romanization. Every write — add, edit, CSV import, `.taigi` restore — stores a Hanji column that only repeats the roman in romanization — a Latin letter, no ideograph or kana, equal to the stored roman (`lán,lán`, `lan2,lán`) — empty, the rule the dictionary pipeline applies to the shipped rows (`phonetics::api::is_roman_only_spelling`, the port of `dictionary/common/cleanup.py` `is_roman_only_hanzi`; shared cases in `dictionary/tests/fixtures/roman_only_spelling_cases.tsv`), so an imported roman-only word and the shipped one are one candidate. A Latin spelling that differs from the roman — an abbreviation (`khe-thi-bui,KTV`), capitals (`tâi-lâm,Tâi-lâm`), a POJ display for a TL roman — is the form the user chose and is kept. Rows an older build stored are repaired at launch (`normalize_stored_rows_if_needed`). |
-| search keys | `custom_search_key` rows | Derived per entry by the engine: TL / POJ / TPS families × tone-number / toneless / abbreviation forms (`engine/phonetics/src/custom_search.rs`) |
+| search keys | `custom_search_key` rows | Derived per entry by the engine: TL / POJ / TPS families × tone-number / toneless / abbreviation forms (`engine/phonetics/src/custom_search.rs`). The TPS family skips a number token (`Tâi-gí 2`), which Bopomofo cannot spell (`custom_tps_reading`) |
 | `created_at` | Timestamp | Creation time (UTC) — DB column only, not on the wire (`CustomDictionaryEntry` tag 4 reserved) |
 | `updated_at` | Timestamp | Last update time — DB column only, not on the wire (tag 5 reserved) |
 
@@ -137,7 +137,7 @@ A custom entry is offered by the same rules as a system dictionary word (behavio
 3. System dictionary queried in the same fetch
 4. Merge (`lexicon::continuous`): each custom row is sorted by `custom_reach` into the full block (typed in full), the partial-prefix block (final syllable typed into) or dropped; the abbreviation block takes the whole-abbreviation rows; deduplicated against the system words
 
-**TPS Hanji conversion walk** (desktop, each walk of the closed readings): the walk hands the toneless body of every lattice edge (`ㄉㄢㄙㆩ`) to `StoredRows::rows_for_edge_keys` (`with_stores.rs`), which reads the custom rows (`CustomDictionaryStore::rows_with_key`, unless `AppConfig.custom_dictionary_disabled`) and learned phrases filed under that `tps:notone` key whole — so a custom word anywhere in the walked text meets its edge. A TL / POJ stored roman keys the edge by its Bopomofo face (`composing::shadow::custom_toneless_key`), and the word commits under its TL-mode `(hanji, canonical TL)` pair. The same Bopomofo-face key lets the `FetchAtPos` walker (slot 0, every platform) take the custom and learned rows `StoredRows::buffer_rows` returns for a TPS buffer.
+**TPS Hanji conversion walk** (desktop, each walk of the closed readings): the walk hands the toneless body of every lattice edge (`ㄉㄢㄙㆩ`) to `StoredRows::rows_for_edge_keys` (`with_stores.rs`), which reads the custom rows (`CustomDictionaryStore::rows_with_keys`, unless `AppConfig.custom_dictionary_disabled`) and learned phrases filed under that `tps:notone` key whole — so a custom word anywhere in the walked text meets its edge. A TL / POJ stored roman keys the edge by its Bopomofo face (`composing::shadow::custom_toneless_key`, number tokens skipped), and the word commits under its TL-mode `(hanji, canonical TL)` pair. The same Bopomofo-face key lets the `FetchAtPos` walker (slot 0, every platform) take the custom and learned rows `StoredRows::buffer_rows` returns for a TPS buffer. **`FetchAtPos` sentence walk** (every input mode): beside the whole-buffer rows, the dispatch layer reads the rows filed under every edge of the walk (`composing::requests::walker_edge_keys` → `rows_for_edge_keys`, keyed `phonetics::api::toneless_edge_key` in the buffer's family: `tl:` / `poj:` / `tps:` `notone`) and hands them over as `UserRows.edge_custom` / `edge_learned`, which only the walker reads — so a custom word inside a longer buffer (`m̄知影` in `guamtsaiiann`) meets its edge without being listed as a whole-buffer candidate.
 
 **Search page**: key prefix over `custom_search_key` in the query's family (tone-number or toneless form, plus the abbreviation form by prefix — `rows_matching`, the system dictionary search's own union)
 
@@ -179,6 +179,12 @@ None. A fresh install starts with an empty custom dictionary on every platform.
 ---
 
 ## UI
+
+### The list's romanization
+
+Every platform's list shows each entry's romanization in the input mode in force, whichever spelling was saved: the platform sends `ListCustomEntries.input_mode` (and `tps_or_maps_to_er`), and the engine fills `CustomDictionaryEntry.display_roman` (`phonetics::api::custom_display_roman`). TL and TPS read a Latin spelling as TL, so a TL special final stays (`téng`); POJ reads it as POJ. English shows the saved spelling, and so does TPS for a row Bopomofo cannot spell (`iPhone`, `páh`). The edit form still starts from the saved `roman`, the filter still matches the saved spelling and the Hanji, and the Manage Dictionaries search keeps its own rendering.
+
+A mode switch respells the rows on screen on macOS (`@AppStorage` change), Linux (the window's refresh) and Windows (the one-second settings beat); iOS and Android respell them at the page's next load.
 
 ### iOS (`CustomDictionaryView`)
 - List with swipe-to-delete, add/edit modal sheet

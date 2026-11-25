@@ -44,6 +44,7 @@ internal fun appConfig(
     syllableSeparator: SyllableSeparator = SyllableSeparator.HYPHEN,
     isTpsOrMappedToER: Boolean = false,
     isKhinsiannInHanjiEnabled: Boolean = false,
+    isHanLoMixedEnabled: Boolean = false,
     dictionarySources: ProtoDictionarySourceToggles? = null,
     // Invert of the Enable Custom Dictionary setting: the engine reads the
     // user's dictionary only with it on. Default `false` = read it.
@@ -65,6 +66,7 @@ internal fun appConfig(
         .setSyllableSeparator(syllableSeparator.toProto())
         .setTpsOrMapsToEr(isTpsOrMappedToER)
         .setKhinsiannInHanji(isKhinsiannInHanjiEnabled)
+        .setHanLoMixed(isHanLoMixedEnabled)
         .apply { if (dictionarySources != null) setDictionarySources(dictionarySources) }
         .setCustomDictionaryDisabled(isCustomDictionaryDisabled)
         .build()
@@ -105,6 +107,7 @@ internal fun continuousAppConfig(settings: EngineSettings): AppConfig =
         syllableSeparator = settings.syllableSeparator,
         isTpsOrMappedToER = settings.isTpsOrMappedToER,
         isKhinsiannInHanjiEnabled = settings.isKhinsiannInHanjiEnabled,
+        isHanLoMixedEnabled = settings.isHanLoMixedEnabled,
         dictionarySources = dictionaryTogglesProto(DictionaryToggles.from(settings)),
         isCustomDictionaryDisabled = !settings.isCustomDictEnabled,
     )
@@ -121,18 +124,6 @@ internal fun engineInputMode(
 ): String = if (storedInputMode in ENGINE_INPUT_MODES) storedInputMode else unknownAs
 
 private val ENGINE_INPUT_MODES = setOf("tl", "poj", "tps", "english")
-
-/**
- * The engine `input_mode` for [this]. Android's enum has no TPS case (`"tps"`
- * settings collapse to [InputMode.TL] in `InputMode.fromPrefString`), which the
- * engine composes and cases exactly like `"tps"` (`phonetics::api::composing_mode`).
- */
-internal fun InputMode.engineInputMode(): String =
-    when (this) {
-        InputMode.POJ -> "poj"
-        InputMode.TL -> "tl"
-        InputMode.ENGLISH -> "english"
-    }
 
 /**
  * `AppConfig.candidate_display_mode` (field 9). The engine collapses

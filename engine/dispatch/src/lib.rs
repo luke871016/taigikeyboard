@@ -56,13 +56,9 @@ pub fn register_dictionary_bytes(path: &std::path::Path, bytes: Vec<u8>) {
 /// before copying or decoding, so the cap stays in lock-step across the seams.
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 
-/// The open composition's segmentation and candidate order, as JSON, or
-/// `None` when nothing is being composed. The same walk and the same sort
-/// the candidate list uses (`composing::requests::mechanism`). A shell that
-/// draws the mechanism calls this beside the key path; the key path itself
-/// is unchanged.
 /// Install a twelve-field comparison order for this thread. `fields` is a
-/// permutation of [`ranking::SORT_FIELDS`]. `false` leaves the current order
+/// permutation of the built-in stage names (`ranking/src/sort_key.rs`
+/// `SORT_FIELDS`). `false` leaves the current order
 /// in place. The web developer page is the caller; an official input method
 /// never sets one, and another thread keeps the field order of
 /// [`ranking::CandidateSortKey`].
@@ -70,11 +66,17 @@ pub fn set_dev_sort_order(fields: &[&str]) -> bool {
     ranking::set_dev_sort_order(fields)
 }
 
-/// Restore this thread's comparison to [`ranking::SORT_FIELDS`].
+/// Restore this thread's comparison to the built-in order
+/// (`ranking/src/sort_key.rs` `SORT_FIELDS`).
 pub fn reset_dev_sort_order() {
     ranking::reset_dev_sort_order();
 }
 
+/// The open composition's segmentation and candidate order, as JSON, or
+/// `None` when nothing is being composed. The same walk and the same sort
+/// the candidate list uses (`composing::explain::mechanism`). A shell that
+/// draws the mechanism calls this beside the key path; the key path itself
+/// is unchanged.
 pub fn explain_composition(
     config: &AppConfig,
     generation: u64,
@@ -295,7 +297,8 @@ pub fn encode_error(code: ErrorCode) -> Vec<u8> {
 }
 
 /// Wire byte for a `log::Level` as delivered to the platform logger sinks
-/// (`SwiftLoggerSink` / `RustLogger`): Error=0 … Trace=4. One table for both seams.
+/// (iOS `SwiftLoggerSink`, Android `RustEngineBridge.dispatchLog`): Error=0 …
+/// Trace=4. One table for both seams.
 #[must_use]
 pub fn log_level_to_byte(level: log::Level) -> u8 {
     match level {
@@ -378,13 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_returns_fail_parse_for_garbage_bytes() {
-        let resp_bytes = process_request(&[0xff, 0xff, 0xff]);
-        let resp = Response::decode(resp_bytes.as_slice()).unwrap();
-        assert_eq!(resp.error, ErrorCode::FailParse as i32);
-    }
-
-    #[test]
     fn request_cap_accepts_exactly_the_cap_and_refuses_one_byte_over() {
         assert!(!is_request_too_large(MAX_REQUEST_BYTES));
         assert!(is_request_too_large(MAX_REQUEST_BYTES + 1));
@@ -444,18 +440,17 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_returns_fail_invariant_for_record_usage_before_open() {
-        // trace: lib unit tests never open the process's handle, so
-        // `RecordUsage` meets "user data is not open yet".
+    fn dispatch_returns_fail_invariant_for_a_page_request_before_open() {
+        // trace: lib unit tests never open the process's handle, so a page
+        // request meets "user data is not open yet" (`settled_stores`).
         let error = user_data_error(
             12,
             protos::engine::UserDataRequest {
-                method: Some(protos::engine::user_data_request::Method::RecordUsage(
-                    protos::engine::RecordUsage {
-                        display_text: "台灣".into(),
-                        canonical_tl: "tâi-uân".into(),
-                    },
-                )),
+                method: Some(
+                    protos::engine::user_data_request::Method::ListLearningRecords(
+                        protos::engine::ListLearningRecords::default(),
+                    ),
+                ),
             },
         );
         assert_eq!(error, ErrorCode::FailInvariant as i32);

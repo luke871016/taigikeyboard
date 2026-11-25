@@ -69,6 +69,7 @@ fn main() -> ExitCode {
     the_learning_records_list_what_the_keyboard_learned(&window);
     the_read_only_window_writes_nothing(&application);
     the_tps_key_panel_toggles_and_closes_when_tps_is_left(&application);
+    the_window_fits_a_1280_px_screen_at_double_text_size(&window);
     eprintln!("panes: ok");
     ExitCode::SUCCESS
 }
@@ -378,38 +379,40 @@ fn the_custom_dictionary_lists_what_the_store_holds(window: &Rc<SettingsWindow>)
     eprintln!("panes: custom dictionary lists the store; Manage Dictionaries mounts its search");
 }
 
-/// One pick, as the IME reports it: the engine counts `(word, tl)`.
-fn record_pick(word: &str, tl: &str) {
-    use prost::Message;
-    use protos::engine::{
-        request, user_data_request, ErrorCode, RecordUsage, Request, Response, UserDataRequest,
-    };
-    let pick = Request {
-        id: 1,
-        payload: Some(request::Payload::UserData(UserDataRequest {
-            method: Some(user_data_request::Method::RecordUsage(RecordUsage {
-                display_text: word.to_owned(),
-                canonical_tl: tl.to_owned(),
-            })),
-        })),
-        ..Request::default()
-    };
-    let answer = Response::decode(dispatch::process_request(&pick.encode_to_vec()).as_slice())
-        .expect("the engine answers");
-    assert_eq!(answer.error, ErrorCode::Ok as i32, "the pick is counted");
+/// Seeds the word-frequency counts through the page's own Import Backup job:
+/// 食飯 picked twice, 啉茶 once.
+fn seed_picks() {
+    use taigi_desktop_core::settings::learning_records::import_backup_job;
+    use taigi_desktop_core::settings::presentation::PageMessage;
+    let directory = tempfile::tempdir().expect("a temp directory");
+    let path = directory.path().join("picks.taigi");
+    std::fs::write(
+        &path,
+        r#"{"version": 4, "userFrequency": [
+            {"word": "食飯", "tl": "tsia̍h-pn̄g", "count": 2, "lastUsed": "2026-11-23 00:00:00"},
+            {"word": "啉茶", "tl": "lim-tê", "count": 1, "lastUsed": "2026-11-23 00:00:00"}
+        ]}"#,
+    )
+    .expect("write the backup");
+    let outcome = import_backup_job(&path);
+    assert!(
+        matches!(
+            outcome.message,
+            Some(PageMessage::BackupImported { frequency: 2, .. })
+        ),
+        "both counts restored: {:?}",
+        outcome.message
+    );
 }
 
-/// trace: 食飯 picked twice and 啉茶 once (word frequency, the default
+/// trace: 食飯 counted twice and 啉茶 once (word frequency, the default
 /// kind, most used first) → rows 食飯 (2), 啉茶 (1); 啉茶 set to 9 → it
 /// leads; 食飯 deleted → one row left (set and delete through the engine;
 /// the page's dialogs are device dogfood); the kind picker → phrases, none.
-/// The engine's list waits behind the queued picks on the same store writer.
 fn the_learning_records_list_what_the_keyboard_learned(window: &Rc<SettingsWindow>) {
     use taigikeyboard_settings::pages::learning_records::LearningRecordsPage;
     user_data::clear_learning_records().expect("empty the learning stores");
-    record_pick("食飯", "tsia̍h-pn̄g");
-    record_pick("食飯", "tsia̍h-pn̄g");
-    record_pick("啉茶", "lim-tê");
+    seed_picks();
     let document = window.writer().borrow().document().clone();
     let strings =
         taigikeyboard_settings::presentation::strings_for(window.writer().borrow().document());
@@ -610,6 +613,29 @@ fn pump_until(mut done: impl FnMut() -> bool) {
         context.iteration(false);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// L4: at GNOME's text scale 2.0 (Xft DPI 192) the window's minimum width
+/// was 1334 px — the Learning Records heading line, four equal columns no
+/// narrower than the unbroken "Romanization" — so it ran off a 1280 px
+/// screen on every pane. The minimum now leaves room for the screen's dock.
+fn the_window_fits_a_1280_px_screen_at_double_text_size(window: &Rc<SettingsWindow>) {
+    const SCREEN_WIDTH: i32 = 1280;
+    const DOCK_WIDTH: i32 = 66;
+    let settings = gtk::Settings::default().expect("GTK settings");
+    let base_dpi = settings.gtk_xft_dpi();
+    settings.set_gtk_xft_dpi(96 * 1024 * 2);
+    let root: gtk::Widget = window.window().clone().upcast();
+    for pane in BUILT {
+        window.show_pane(pane);
+        let (minimum, _, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            minimum <= SCREEN_WIDTH - DOCK_WIDTH,
+            "{pane:?}: minimum width {minimum} px at text scale 2.0"
+        );
+    }
+    settings.set_gtk_xft_dpi(base_dpi);
+    eprintln!("panes: window fits a 1280 px screen at text scale 2.0");
 }
 
 /// The first descendant of type `T`, depth first.

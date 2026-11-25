@@ -5,20 +5,23 @@
 > **Related**: desktop-release.md (the shared flow), linux-roadmap.md (L10 / L11), windows-release.md (the sibling half)
 
 How the Linux half of a desktop version ships. The shared flow — one draft
-release `desktop-<version>` for every desktop platform, tested and published by a
-person — is `desktop-release.md`; installing one as a user is
+release `desktop-<version>` for every desktop platform, published on the 5th
+after the maintainer's approval — is `desktop-release.md`; installing one as a user is
 [`docs/INSTALL.md` § Linux](../INSTALL.md#linux). This file is only what the
 Linux artifact is and how it is built.
 
 ## The artifacts
 
-Three x86_64 packages, each with its `.sha256`, attached to the
-`desktop-<version>` draft beside the macOS `.pkg` and the Windows `.exe`:
+Five packages — three x86_64, and the `.deb` and `.rpm` again for arm64 —
+each with its `.sha256`, attached to the `desktop-<version>` draft beside the
+macOS `.pkg` and the Windows `.exe`:
 
 | Asset | For | Built on |
 |---|---|---|
 | `taigikeyboard_<version>_amd64.deb` | Ubuntu 24.04+ / Debian 13+ / Mint 22+ / Pop!_OS 24.04+ | `ubuntu-24.04` runner |
+| `taigikeyboard_<version>_arm64.deb` | Ubuntu 24.04+ / Debian 13+ on arm64 | `ubuntu-24.04-arm` runner |
 | `taigikeyboard-<version>-1.x86_64.rpm` | Fedora 44+ | `fedora:44` container |
+| `taigikeyboard-<version>-1.aarch64.rpm` | Fedora 44+ on aarch64 | `fedora:44` container on the Arm runner |
 | `taigikeyboard-<version>-1-x86_64.pkg.tar.zst` | Arch Linux and its rolling derivatives (`pacman -U`) | `archlinux:latest` container |
 
 The floor is the settings window's GTK 4.12 / libadwaita 1.5: Ubuntu 22.04 and
@@ -29,7 +32,7 @@ AUR `taigikeyboard` split packages (`fcitx5-` / `ibus-taigikeyboard`) are
 community-maintained, built from the tagged source; this project does not
 maintain them.
 
-All three are packed from the SAME `make install PREFIX=/usr` recipe into a
+All five are packed from the SAME `make install PREFIX=/usr` recipe into a
 staging root — no second build inside rpmbuild or makepkg. One package holds
 both shells (Debian and Fedora pick the framework through `fcitx5 | ibus`;
 pacman has no alternatives, so Arch requires `fcitx5`). For downstream split
@@ -112,7 +115,7 @@ maintainer's Mac.
   `libFcitx5Core`) and `ibus` is optional. Arch is rolling: a package built
   against one Fcitx5 may need a rebuild after its ABI moves.
 
-CI installs each of the three into a FRESH container of its distribution
+CI installs each of the three — and the arm64 `.deb` / aarch64 `.rpm` — into a FRESH container of its distribution
 (`install-check`, one matrix, the same checks for every format — no build
 dependency around to hide a missing runtime one): files in place, every
 linked library resolved, `ibus-daemon` spawning the engine from the installed
@@ -130,26 +133,26 @@ the way `windows-build.yml` is the Windows half:
   calls it, and on `workflow_dispatch` — never per pull request: the pre-PR gate for a Linux
   change is `make linux-check` locally (or a manual dispatch). Every run
   builds the three packages and keeps them as workflow artifacts (`linux-deb`,
-  `linux-rpm`, `linux-arch`), checks the expected paths are inside the `.deb`,
+  `linux-rpm`, `linux-arch`) — plus the arm64 `.deb` and aarch64 `.rpm` from the
+  `ubuntu-24.04-arm` runner (`linux-deb-arm64`, `linux-rpm-arm64`) — checks the expected paths are inside the `.deb`,
   that the addon file is the one the `.conf` names, and the desktop entry
   (`desktop-file-validate`). Nothing reaches a draft; the build job can only
   read.
 - The monthly cut (`desktop-train.yml`) calls it, and `tools/release/stage-desktop.sh`
   (`make desktop-patch PLATFORM=linux`, `make desktop-release`) dispatches it on `main`
-  beside the Windows run, with the staged commit as `source_sha`, and waits;
+  beside the other platforms' runs, with the staged commit as `source_sha`, and waits;
   every job checks out that commit; the `attach` job (the only one that can
   write) runs only with a `source_sha`, refuses a published release
-  or a draft targeting another commit, and uploads the `.deb`, the `.rpm`
-  and the Arch `.pkg.tar.zst`, each with its `.sha256`, to the
+  or a draft targeting another commit, and uploads the five packages (x86_64 and arm64 `.deb` /
+  `.rpm`, the Arch `.pkg.tar.zst`), each with its `.sha256`, to the
   `desktop-<version>` draft `stage-desktop.sh` created — never
   over an asset already there. A dispatch from any other ref, or without
-  `source_sha`, only builds. The monthly train (`desktop-train.yml`) calls the
-  workflow the same way, with `build_only` on a dry run. The build job also checks the package's control
+  `source_sha`, only builds; the train passes `build_only` on a dry run. The build job also checks the package's control
   `Version` / `Architecture` and that the build rewrote nothing tracked
   (`Cargo.lock` included — `make version-desktop` refreshes the members'
   versions in it).
 
-Publishing stays a person's (`desktop-release.md`). No signing: a `.deb`
+Publishing: `desktop-release.md`. No signing: a `.deb`
 downloaded from the project page is verified by its `.sha256`, as the unsigned
 Windows channel is; there is no apt repository with its own key.
 
@@ -162,12 +165,14 @@ nothing, manually or automatically; the General pane shows the running version
 and a Download link to taigikeyboard.tw, the panel menu has no Check for Updates row, the
 `update*` settings keys stay unwritten and `taigi-desktop-update` is not linked
 (no TLS stack in the package). The announcement (`tools/release/announce-release.sh`)
-still writes `_data/linux_release.json`, `_data/linux_rpm_release.json` and
-`_data/linux_arch_release.json` (version, download URL, `sha256`, release page)
-in the same website commit as the other two — the landing page's Linux
+still writes `_data/linux_release.json`, `_data/linux_rpm_release.json`,
+`_data/linux_arch_release.json` and the arm64 `_data/linux_arm64_release.json`
+/ `_data/linux_rpm_arm64_release.json` (version, download URL, `sha256`, release page)
+in the same website commit as the other platforms — the landing page's Linux
 buttons read them — but there is no appcast and nothing to poll. A release
 missing one format leaves that file on its previous version, so the site
-splits the Linux button into three only when all three name the same tag. The
+splits the Linux button into three only when all three name the same tag, and
+adds each arm64 button only when its file names that tag too. The
 website shows that button only while its `enable_linux_download` is `true`;
 that switch hides the entry point, not the asset, which is public the moment
 the release is published.

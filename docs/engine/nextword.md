@@ -33,7 +33,7 @@
 - Fields: bitmask (u16), count (u32), next_word, next_tl
 - Bitmask filter replaces SQL WHERE for dictionary source filtering
 
-**User learning** — `user_association.db` (SQLite, writable, schema v6, `engine/userdata/src/association.rs`)
+**User learning** — `user_association.db` (SQLite, writable, schema v7, `engine/userdata/src/association.rs`)
 
 ```sql
 CREATE TABLE user_association (
@@ -121,7 +121,7 @@ Engine state machine + decision tables + scoring all live in Rust `engine/nextwo
 | Component | Location |
 |-----------|----------|
 | Persisted state (`last_selected_word`, `last_selection_time_ms`, `predictions_visible`, `current_generation`) | Rust `nextword::api::PersistedState` |
-| Intent set (`WordSelected`, `Backspace`, `ContextTimeoutFired`, `ClearForNewComposing`, `ResetAll`, `UpdateLastSelectedWord`, `SetPredictionsVisible`) | Rust `nextword::api::Intent` |
+| Intent set (`WordSelected`, `Backspace`, `ContextTimeoutFired`, `ClearForNewComposing`, `ResetAll`, `SetPredictionsVisible`) | Rust `nextword::api::Intent` |
 | Decide / filter / score | Rust `engine/nextword/src/{decide,filter,scorer}.rs` |
 | Generation guard (drops stale async results) | Rust `nextword::PersistedState.current_generation` |
 | Bigram source (read-only) | `association.bin` via Rust `engine/lexicon::lookup_associations` |

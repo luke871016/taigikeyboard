@@ -21,7 +21,6 @@ import com.siansiansu.taigikeyboard.ime.settings.SyllableSeparator
  */
 data class NextWordDecideResult(
     val effects: List<Effect>,
-    val currentGeneration: Long,
     val predictionsVisible: Boolean,
 ) {
     sealed class Effect {
@@ -44,15 +43,12 @@ data class NextWordDecideResult(
             val nowMs: Long,
         ) : Effect()
 
-        data class ClearPredictionsUI(
-            val generation: Long,
-        ) : Effect()
+        object ClearPredictionsUI : Effect()
     }
 
     companion object {
         val NOOP = NextWordDecideResult(
             effects = emptyList(),
-            currentGeneration = 0L,
             predictionsVisible = false,
         )
     }
@@ -60,12 +56,16 @@ data class NextWordDecideResult(
 
 /**
  * UI-ready prediction value. `subtitle` is `null` when the wire string
- * is empty (filter contract — happens iff roman is empty).
+ * is empty (filter contract — roman is empty, or `hanji` is: a
+ * romanization-only prediction, whose `text` is the romanization).
  */
 data class NextWordEnginePrediction(
     val text: String,
     val subtitle: String?,
-    /** The Hanji as shown (POJ mode renders a Han-Lo word's romanization in POJ). */
+    /**
+     * The Hanji as shown (POJ mode renders a Han-Lo word's romanization in POJ);
+     * empty for a romanization-only prediction (Hàn-Lô lām).
+     */
     val hanji: String,
     /**
      * The stored Hanji spelling (`EnginePrediction.display_text`): the key a tap
@@ -241,6 +241,7 @@ fun RustEngineBridge.nextwordPredictNext(
     candidateDisplayMode: CandidateDisplayMode = CandidateDisplayMode.SIDE_BY_SIDE,
     syllableSeparator: SyllableSeparator = SyllableSeparator.HYPHEN,
     isKhinsiannInHanjiEnabled: Boolean = false,
+    isHanLoMixedEnabled: Boolean = false,
 ): NextWordFilterResult {
     val builder = com.siansiansu.taigikeyboard.engine.proto.PredictNext
         .newBuilder()
@@ -264,6 +265,7 @@ fun RustEngineBridge.nextwordPredictNext(
                 candidateDisplayMode = candidateDisplayMode,
                 syllableSeparator = syllableSeparator,
                 isKhinsiannInHanjiEnabled = isKhinsiannInHanjiEnabled,
+                isHanLoMixedEnabled = isHanLoMixedEnabled,
             ),
     ) ?: return NextWordFilterResult(emptyList(), wasStale = false)
     if (!resp.hasFilter()) {
@@ -353,7 +355,7 @@ internal fun synthDecideResult(proto: DecideResult): NextWordDecideResult {
             }
 
             eff.hasClearPredictionsUi() -> {
-                NextWordDecideResult.Effect.ClearPredictionsUI(eff.clearPredictionsUi.generation)
+                NextWordDecideResult.Effect.ClearPredictionsUI
             }
 
             else -> {
@@ -363,7 +365,6 @@ internal fun synthDecideResult(proto: DecideResult): NextWordDecideResult {
     }
     return NextWordDecideResult(
         effects = effects,
-        currentGeneration = proto.currentGeneration,
         predictionsVisible = proto.predictionsVisible,
     )
 }

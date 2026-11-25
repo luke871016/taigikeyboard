@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use lexicon::association_reader::AssociationReader;
 use lexicon::dictionary_reader::{
     DictionaryReader, Filter, KAUTIAN_BIT, KAUTIAN_SUBTAG_ACCENT_SHIFT, KAUTIAN_SUBTAG_MAIN_BIT,
-    WIRE_KAUTIAN_SUBCOLL_ACTIVE_BIT, WIRE_KAUTIAN_SUBCOLL_SHIFT,
+    WIRE_KAUTIAN_SUBCOLL_SHIFT,
 };
 use lexicon::prefix_index::PrefixIndex;
 use lexicon::search::{self, SearchParams};
@@ -20,11 +20,10 @@ use lexicon::LexiconError;
 use lexicon::{EngineHandle, LexiconPaths};
 use phonetics::KeyFamily;
 
-use crate::common::{build_tkdb_v4, write_synthetic_fst};
+use crate::common::{build_tkdb_v4, build_tkdb_v4_subtag, write_synthetic_fst};
 use test_support::{build_tkwa, engine_install_lock, write_temp};
 
-// --- INVARIANT_LEX_FILTER_BITMASK ---------------------------------------
-
+// INVARIANT_LEX_FILTER_BITMASK
 #[test]
 fn invariant_lex_filter_bitmask_three_layers() {
     // Layer 1: variant exclusion
@@ -33,7 +32,6 @@ fn invariant_lex_filter_bitmask_three_layers() {
         khiin: true,
         all_enabled: true,
         enabled_mask: 0,
-        kautian_subcoll_active: false,
         kautian_subcoll_mask: 0,
     };
     let variant_record = 1u16 << 12; // VARIANT_BIT
@@ -45,7 +43,6 @@ fn invariant_lex_filter_bitmask_three_layers() {
         khiin: false,
         all_enabled: true,
         enabled_mask: 0,
-        kautian_subcoll_active: false,
         kautian_subcoll_mask: 0,
     };
     let khiin_record = 1u16 << 9; // KHIIN_BIT
@@ -59,13 +56,16 @@ fn invariant_lex_filter_bitmask_three_layers() {
         khiin: true,
         all_enabled: false,
         enabled_mask: (1u16 << 0) | (1u16 << 10), // kautian + dev enabled
-        kautian_subcoll_active: false,
-        kautian_subcoll_mask: 0,
+        kautian_subcoll_mask: SUBTAG_MAIN,
     };
     let dev_record = 1u16 << 10;
     assert!(DictionaryReader::passes_filter(dev_record, 0, &f3));
     let kautian_record = 1u16 << 0;
-    assert!(DictionaryReader::passes_filter(kautian_record, 0, &f3));
+    assert!(DictionaryReader::passes_filter(
+        kautian_record,
+        SUBTAG_MAIN,
+        &f3
+    ));
     let stti_record = 1u16 << 7;
     assert!(!DictionaryReader::passes_filter(stti_record, 0, &f3));
 
@@ -77,8 +77,7 @@ fn invariant_lex_filter_bitmask_three_layers() {
     assert!(!DictionaryReader::passes_filter(dev_record, 0, &f3_dev_off));
 }
 
-// --- INVARIANT_LEX_BINARY_FORMAT ---------------------------------------
-
+// INVARIANT_LEX_BINARY_FORMAT
 #[test]
 fn invariant_lex_binary_format_rejects_bad_magic() {
     let bad = synth_dictionary_bin_with_version(b"BAD!", 2, &[]);
@@ -95,8 +94,7 @@ fn invariant_lex_binary_format_rejects_bad_version() {
     assert!(matches!(err, LexiconError::InvalidBinary(_)), "{err:?}");
 }
 
-// --- INVARIANT_LEX_FST_ROWID_PAYLOAD -----------------------------------
-
+// INVARIANT_LEX_FST_ROWID_PAYLOAD
 #[test]
 fn invariant_lex_fst_rowid_payload_round_trip() {
     let pairs: &[(&str, u32)] = &[
@@ -126,8 +124,7 @@ fn invariant_lex_fst_rowid_payload_round_trip() {
     assert_eq!(hanji_hits, vec![50]);
 }
 
-// --- INVARIANT_LEX_LOOKUP_ROWIDS_ORDER ---------------------------------
-
+// INVARIANT_LEX_LOOKUP_ROWIDS_ORDER
 #[test]
 fn invariant_lex_lookup_rowids_order_preserves_insertion() {
     // D-12 parity correction toward Android: search.rs concatenates
@@ -157,8 +154,6 @@ fn invariant_lex_lookup_rowids_order_preserves_insertion() {
         "fst byte-sort order across prefix scan"
     );
 }
-
-// --- TPS three-index read path (C-1) -----------------------------------
 
 /// `SearchParams { family: KeyFamily::Tps }` now hits the `tps:` FST family
 /// directly. Pins the C-0 emit shape (literal Bopomofo + tone mark) +
@@ -263,11 +258,9 @@ fn search_keeps_rowid_order_on_an_equal_cost_and_frequency() {
 /// MOE-first move reads the effective bitmask.
 #[test]
 fn search_moves_only_effective_kautian_rows_first() {
-    // trace: subcollection gate on, main subtag only → 佮 (Kautian accent +
-    // TAIGITV) keeps TAIGITV alone; cost order 佮, 甲, 合 → 合 first.
-    let enabled = 0x1FFF
-        | WIRE_KAUTIAN_SUBCOLL_ACTIVE_BIT
-        | (u32::from(SUBTAG_MAIN) << WIRE_KAUTIAN_SUBCOLL_SHIFT);
+    // trace: main subtag only → 佮 (Kautian accent + TAIGITV) keeps TAIGITV
+    // alone; cost order 佮, 甲, 合 → 合 first.
+    let enabled = 0x1FFF | (u32::from(SUBTAG_MAIN) << WIRE_KAUTIAN_SUBCOLL_SHIFT);
     let rows = [
         (KAUTIAN_BIT | TAIGITV, SUBTAG_ACCENT, 10, 5_000, "佮"),
         (TAIGITV, 0, 5_000, 9_000, "甲"),
@@ -305,8 +298,6 @@ fn tps_input_mode_tone8_substitution_matches_build_pipeline_key() {
         "U+02D9 input must canonicalize to U+0307 before tps: lookup",
     );
 }
-
-// --- C-3a TPS er↔or build-time dual-emit -------------------------------
 
 /// PR C-3a moved the runtime `tps_or_mapped_to_er` expansion into the
 /// build pipeline: each `er`/`or` row emits `tps:` keys for BOTH the
@@ -359,8 +350,7 @@ fn tps_er_or_dual_emit_both_glyphs_hit_same_rowid() {
     );
 }
 
-// --- INVARIANT_LEX_ASSOC_BITMASK_FILTER --------------------------------
-
+// INVARIANT_LEX_ASSOC_BITMASK_FILTER
 /// Regression for v3.5.6 fix r3173013233 — `api::lookup_associations` previously
 /// hardcoded `u32::MAX` instead of plumbing `req.enabled_sources_bitmask`,
 /// which silently disabled the source-toggle filter for bundled bigram
@@ -412,8 +402,7 @@ fn lookup_associations_filters_before_limit() {
     assert_eq!(words, vec!["食"]);
 }
 
-// --- INVARIANT_LEX_API_BITMASK_HONORED ---------------------------------
-
+// INVARIANT_LEX_API_BITMASK_HONORED
 /// Regression for v3.5.6 fix r3173440126 — the Tab3 search paths in
 /// `lexicon::api` once hardcoded `u32::MAX`, bypassing user
 /// dictionary-source toggles AND falsely forcing variant + khiin on. Drives
@@ -432,7 +421,10 @@ fn invariant_lex_api_bitmask_plumbing_honored() {
     // it as a tiebreaker; a `0` frequency would be valid but tests with a
     // realistic non-zero value catch sort regressions too.
     let fst_path = write_synthetic_fst("api-bitmask.fst", &[("tl:test", 1), ("hanzi:好", 1)]);
-    let dict_bytes = synth_dictionary_bin(b"TKDB", &[(0x0001u16, 100, "好", "ho2")]);
+    // Main entry subtag: the kautian toggle sends main only (no subcollection
+    // message), and every shipped kautian row carries one.
+    let dict_bytes =
+        build_tkdb_v4_subtag(b"TKDB", &[(0x0001u16, 100, 1, SUBTAG_MAIN, "好", "ho2")]);
     let dict_path = write_temp("api-bitmask-dict.bin", &dict_bytes);
     let association_path = write_temp("api-bitmask-assoc.bin", &synth_association_bin());
 
@@ -446,8 +438,8 @@ fn invariant_lex_api_bitmask_plumbing_honored() {
     .expect("paths validated");
     EngineHandle::install(paths).expect("install");
 
-    // trace: kautian alone → mask 0x0001 (the row's bit), taigitv alone →
-    // mask 0x0002 (`dictionary_filters` bit layout).
+    // trace: kautian alone → mask 0x0001 | main << 14 (the row's bit + its
+    // main subtag), taigitv alone → mask 0x0002 (`dictionary_filters` bit layout).
     let kautian = DictionarySourceToggles {
         kautian: true,
         ..DictionarySourceToggles::default()
@@ -486,8 +478,7 @@ fn invariant_lex_api_bitmask_plumbing_honored() {
     assert!(rows("好", &taigitv).is_empty(), "Hanji, other mask");
 }
 
-// --- INVARIANT_LEX_INSTALL_PATH_VALIDATION -----------------------------
-
+// INVARIANT_LEX_INSTALL_PATH_VALIDATION
 #[test]
 fn invariant_lex_install_path_validation_rejects_nul() {
     let err = LexiconPaths::validated("/foo\0bar", "/dict.bin", "/assoc.bin", "", 1)
@@ -502,8 +493,7 @@ fn invariant_lex_install_path_validation_rejects_relative() {
     assert!(matches!(err, LexiconError::PathNotAbsolute(_)), "{err:?}");
 }
 
-// --- INVARIANT_LEX_INSTALL_SEARCH_SERIALIZATION ------------------------
-
+// INVARIANT_LEX_INSTALL_SEARCH_SERIALIZATION
 #[test]
 fn invariant_lex_install_search_serialization_no_panic() {
     use std::sync::Arc;
@@ -547,8 +537,6 @@ fn invariant_lex_install_search_serialization_no_panic() {
         h.join().expect("thread joins without panic");
     }
 }
-
-// --- helpers -----------------------------------------------------------
 
 /// Convenience wrapper: emits a v4 TKDB binary with `syllable_count = 1` and
 /// `kautian_subtag = 0` on every row. Callers that assert on syllable_count or
@@ -601,8 +589,6 @@ fn build_minimal_install_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
 fn synth_association_bin() -> Vec<u8> {
     build_tkwa(2, &[])
 }
-
-// --- with_state readers do not serialize against each other -------------------
 
 /// A composing `Append` on the IME main thread renders its display through
 /// `with_state` (compound-hyphen oracle) while a worker-thread candidate

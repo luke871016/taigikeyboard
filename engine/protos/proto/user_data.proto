@@ -20,11 +20,15 @@ message UserDataRequest {
   // (removed 2026-11-20, roadmap C3).
   reserved 11;
   reserved "search_custom_entries";
+  // Tag 3 was `record_usage`, a pick counted from outside the engine; the
+  // engine counts every pick itself and no platform sent it (removed
+  // 2026-11-23).
+  reserved 3;
+  reserved "record_usage";
 
   oneof method {
     OpenUserData open = 1;
     ResetUserData reset = 2;
-    RecordUsage record_usage = 3;
     ListCustomEntries list_custom_entries = 4;
     SaveCustomEntry save_custom_entry = 5;
     DeleteCustomEntry delete_custom_entry = 6;
@@ -43,11 +47,13 @@ message UserDataResponse {
   // Tag 11 was `custom_entry_matches`, `search_custom_entries`'s answer.
   reserved 11;
   reserved "custom_entry_matches";
+  // Tag 3 was `usage_recorded`, `record_usage`'s answer.
+  reserved 3;
+  reserved "usage_recorded";
 
   oneof result {
     UserDataOpened opened = 1;
     UserDataReset reset = 2;
-    UsageRecorded usage_recorded = 3;
     CustomEntries custom_entries = 4;
     CustomEntrySaved custom_entry_saved = 5;
     CustomEntryDeleted custom_entry_deleted = 6;
@@ -70,8 +76,8 @@ enum UserDataJournal {
   USER_DATA_JOURNAL_DELETE = 1;
 }
 
-// Opens the stores for this process, once. Every other request but
-// `RecordUsage` waits until the open has finished (a page must not read a
+// Opens the stores for this process, once. Every other request waits
+// until the open has finished (a page must not read a
 // dictionary still being taken over). Absolute file paths: one
 // directory everywhere except Android, whose `user_association.db` lives in
 // `filesDir`. The stores are in use from the moment this is handled: a pick
@@ -135,29 +141,6 @@ message UserDataReset {
   repeated string failures = 5;
 }
 
-// The user committed a candidate or picked a prediction — one frequency
-// count for the `(display_text, canonical_tl)` pair. Sent exactly where
-// each platform recorded usage itself before. Queued, best-effort: the
-// answer does not wait for the write.
-//
-// The other learning writes need no op: the engine persists what it
-// decides itself — a phrase a final commit taught, the bigrams a next-word
-// decision records — and never hands them to the platform.
-message RecordUsage {
-  string display_text = 1;
-  string canonical_tl = 2;
-  // Tag 3 was the pick's Hanji, which touched a learned phrase; the engine
-  // touches the phrase itself on the commits it resolves, so a platform
-  // pick only counts (removed 2026-10-09). Tag 4 was the desktop's
-  // frequency-recording toggle; no platform has a UI for it, so every pick
-  // counts (removed 2026-09-30).
-  reserved 3, 4;
-  reserved "hanji", "frequency_recording_disabled";
-}
-
-message UsageRecorded {}
-
-// ---- The custom-dictionary pages (roadmap P4) ----
 //
 // Every platform's Custom Dictionary page reads and edits the store through
 // these; "delete everything" is `ResetUserData.custom_dictionary`. What the
@@ -189,8 +172,13 @@ message CustomDictionaryEntry {
   reserved "created_at", "updated_at";
 
   string id = 1;
+  // The romanization as the user saved it — what an edit starts from.
   string roman = 2;
   string hanji = 3;
+  // `roman` rendered in `ListCustomEntries.input_mode` (TL / POJ / TPS
+  // Bopomofo; English keeps the saved spelling) — what a list row shows.
+  // Filled by the list only; empty in every other answer.
+  string display_roman = 6;
 }
 
 // A page of the dictionary, newest edit first. `filter` matches romanization
@@ -200,6 +188,12 @@ message ListCustomEntries {
   string filter = 1;
   uint32 limit = 2;
   uint32 offset = 3;
+  // The settings input mode, spelled as `AppConfig.input_mode`
+  // (`tl` / `poj` / `tps` / `english`; anything else reads as TL): the
+  // spelling each entry's `display_roman` is rendered in.
+  string input_mode = 4;
+  // `AppConfig.tps_or_maps_to_er`, for a TPS rendering.
+  bool tps_or_maps_to_er = 5;
 }
 
 message CustomEntries {
@@ -252,7 +246,6 @@ message ExportCustomCsv {}
 // The whole dictionary as `roman,hanji` lines, for the platform to save.
 message CustomCsvExported { bytes csv = 1; }
 
-// ---- The `.taigi` backup (roadmap P4b) ----
 //
 // Version 4 (`userdata/src/backup.rs`): the custom dictionary, frequency
 // counts, learned bigrams and learned phrases (§50), with each learned row's
@@ -294,7 +287,6 @@ message BackupImported {
   uint32 learned_phrases = 5;
 }
 
-// ---- The Learning Records pages (learning-records-page-roadmap) ----
 //
 // Every platform's Learning Records page lists what the keyboard learned,
 // corrects one row's count, deletes one row and adds one learned phrase to

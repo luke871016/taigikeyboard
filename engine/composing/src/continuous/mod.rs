@@ -24,7 +24,7 @@
 //! 3. Per-candidate recase loop (`recase_roman` over each
 //!    `consumed_span`; presentation `roman` only —`display_text` / `hanji`
 //!    untouched).
-//! 4. `fetch_walker_slot0_inner(..) → Some(slot0)`: span-aware
+//! 4. `synth_cut(..) → Some(cut)` → `walker_slot0(.., &cut)`: span-aware
 //!    retain-dedupe on `(hanji, consumed_span)` + identity or recased roman, then
 //!    `insert(0, ..)`. The walker returns a [`WalkerSlot0`] and the seam
 //!    converts it to a `RawCandidate` (slot 0 is an explicit prepend, not
@@ -65,10 +65,9 @@
 //! once at the head of `fetch_walker_slot0`. A2 hoists ONE `LexiconHandle::
 //! with_state` scope into [`assemble_candidates`] and calls
 //! `build_shadow_lattice_with_barriers(raw, inv, mode)` exactly once. Byte-identical
-//! under the mobile-IME lifecycle invariant — `EngineHandle::install` is
-//! reachable only from `lexicon::api::install_engine` (mobile bridge
-//! startup) plus the two test fixtures (`lexicon/tests/parity.rs`,
-//! `composing/tests/golden_fetch_at_pos.rs`), never from a composing
+//! under the IME lifecycle invariant — in production `EngineHandle::install`
+//! is reachable only from `lexicon::api::install` (the `LexiconRequest.install`
+//! op a shell sends at startup), plus test fixtures, never from a composing
 //! `FetchAtPos`. Re-grep `EngineHandle::install` reachability whenever
 //! touching this seam.
 //!
@@ -94,4 +93,4 @@ pub(crate) use assemble::{assemble_candidates, is_one_syllable_prefix_pick, Asse
 pub(crate) use dedupe::retain_first_by_key;
 pub(crate) use edge::{edge_homophone_words, edge_toneless_bodies};
 pub(crate) use segmentation::{explain_segmentation, BufferCut, Segmentation, WordCut};
-pub(crate) use walk::{synth_consumed_span, walk_buffer};
+pub(crate) use walk::{synth_consumed_span, walk_buffer, SynthCut};

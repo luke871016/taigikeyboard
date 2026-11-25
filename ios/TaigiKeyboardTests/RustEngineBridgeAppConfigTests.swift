@@ -82,6 +82,7 @@ final class RustEngineBridgeAppConfigTests: XCTestCase {
         XCTAssertEqual(config.syllableSeparator, .hyphen)
         XCTAssertFalse(config.tpsOrMapsToEr)
         XCTAssertFalse(config.khinsiannInHanji)
+        XCTAssertFalse(config.hanLoMixed)
     }
 
     func testContinuousAppConfig_forwardsKhinsiannInHanji() {
@@ -89,5 +90,20 @@ final class RustEngineBridgeAppConfigTests: XCTestCase {
         XCTAssertFalse(RustEngineBridge.continuousAppConfig(settings).khinsiannInHanji)
         settings.isKhinsiannInHanjiEnabled = true
         XCTAssertTrue(RustEngineBridge.continuousAppConfig(settings).khinsiannInHanji)
+    }
+
+    /// The case ops send only the nasal-marker switch, inverted on the wire as in `appConfig`.
+    func testCaseAppConfig_carriesOnlyTheInvertedNasalMarkerSwitch() {
+        let off = RustEngineBridge.caseAppConfig(isNasalMarkerUppercaseEnabled: false)
+        XCTAssertTrue(off.forceLowercaseNasalMarker, "ⁿ becomes ᴺ OFF is inverted on the wire")
+        let on = RustEngineBridge.caseAppConfig(isNasalMarkerUppercaseEnabled: true)
+        XCTAssertEqual(on, Taigi_Engine_AppConfig(), "nothing but the nasal-marker switch is set")
+    }
+
+    func testContinuousAppConfig_forwardsHanLoMixed() {
+        var settings = StubEngineSettings()
+        XCTAssertFalse(RustEngineBridge.continuousAppConfig(settings).hanLoMixed)
+        settings.isHanLoMixedEnabled = true
+        XCTAssertTrue(RustEngineBridge.continuousAppConfig(settings).hanLoMixed)
     }
 }

@@ -9,12 +9,12 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{open_user_data, roundtrip, user_data};
+use common::{open_user_data, record_pick, roundtrip};
 use lexicon::LexiconPaths;
 use protos::engine::{
-    composing_request, next_word_request, request, response, user_data_request, AppConfig,
-    CandidateDisplayMode, CandidateMessage, ComposingRequest, DecisionInput,
-    DictionarySourceToggles, FetchAtPos, NextWordRequest, RecordUsage, Reset, Start, WordSelected,
+    composing_request, next_word_request, request, response, AppConfig, CandidateDisplayMode,
+    CandidateMessage, ComposingRequest, DecisionInput, DictionarySourceToggles, FetchAtPos,
+    NextWordRequest, Reset, Start, WordSelected,
 };
 use test_support::{
     build_tkdb, build_tkwa, fst_entry, walker_cost_from_fixture_frequency, write_fst_set,
@@ -63,7 +63,8 @@ fn install_synthetic_lexicon() {
             bitmask: KAUTIAN_BIT,
             frequency: freq,
             syllable_count: Some(syll),
-            kautian_subtag: Some(0),
+            // Main entry (subtag bit 0), as every shipped kautian row carries one.
+            kautian_subtag: Some(1),
             walker_cost: Some(walker_cost_from_fixture_frequency(freq)),
             hanji,
             tl,
@@ -188,10 +189,7 @@ fn frequency_and_context_ranks_share_across_khinsiann_and_plain_hanji() {
     assert_eq!(before.first().map(String::as_str), Some("繪記直"));
 
     // Record usage of `--` display form `會記--得`: persisted as plain `會記得`.
-    user_data(user_data_request::Method::RecordUsage(RecordUsage {
-        display_text: "會記--得".to_owned(),
-        canonical_tl: "ē-kì--tit".to_owned(),
-    }));
+    record_pick("會記--得", "ē-kì--tit");
 
     let reader = UserDataStores::at(
         UserDataPaths::in_directory(directory.path()),
@@ -224,10 +222,7 @@ fn frequency_and_context_ranks_share_across_khinsiann_and_plain_hanji() {
 
     // 2. Record usage of plain `轉去` (`tńg--khì`); verify custom `轉--去`
     // shares that `FrequencyMap` boost against custom `當--機`.
-    user_data(user_data_request::Method::RecordUsage(RecordUsage {
-        display_text: "轉去".to_owned(),
-        canonical_tl: "tńg--khì".to_owned(),
-    }));
+    record_pick("轉去", "tńg--khì");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let rows = reader

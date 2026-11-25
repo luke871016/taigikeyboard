@@ -9,10 +9,9 @@ use protos::engine::phonetics_response::Result as PhonResult;
 use protos::engine::{
     AppConfig, BoolResult, DoubleSpacePeriod, ExternalLookupDigitForm, GetToneVariations,
     IsAttachingPunctuation, IsJoinerPunctuation, IsSpacedPunctuation, PhoneticsRequest,
-    PhoneticsResponse, StringResult, TlDisplayToTps, TlToPoj, ToneVariationsResult,
+    PhoneticsResponse, StringResult, ToneVariationsResult,
 };
 
-// ---------------- helpers ----------------
 //
 // Domain-level tests: drive `phonetics::requests::handle` directly and
 // assert against `Result<PhoneticsResponse>`. Envelope concerns
@@ -72,6 +71,7 @@ fn tl_config() -> AppConfig {
         c_types_affricate: false,
         f_types_hyphen: false,
         khinsiann_in_hanji: false,
+        han_lo_mixed: false,
     }
 }
 
@@ -92,12 +92,9 @@ fn poj_config(oo: bool, nn: bool) -> AppConfig {
         c_types_affricate: false,
         f_types_hyphen: false,
         khinsiann_in_hanji: false,
+        han_lo_mixed: false,
     }
 }
-
-// ============================================================
-// Phonetics core
-// ============================================================
 
 // `api::normalize_tone` — live via `composing::derived`; the retired
 // `NormalizeTone` op no longer carries it, so these call it directly.
@@ -226,12 +223,10 @@ fn normalize_tone_poj_doubletap_toggles_stay_independent() {
     assert_eq!(out, "hoonn", "neither");
 }
 
+// No wire op since 2026-11-23 (tag 13 reserved); composing calls it in-process.
 #[test]
 fn tl_to_poj_display_round_trip() {
-    let resp = run(Method::TlToPoj(TlToPoj {
-        input: "hoo".to_string(),
-    }));
-    let out = string_result(&resp);
+    let out = phonetics::api::tl_display_to_poj_display("hoo");
     assert!(
         out.contains('\u{0358}'),
         "TL oo should map to POJ o͘: {out:?}"
@@ -273,10 +268,6 @@ fn external_lookup_digit_form_folds_o_dot_and_nasal_marker() {
     }
 }
 
-// ============================================================
-// TPS
-// ============================================================
-
 // `api::contains_tps` — live via composing / custom_search / nextword; the
 // retired `ContainsTps` op no longer carries it, so these call it directly.
 
@@ -291,28 +282,7 @@ fn contains_tps_false_for_latin() {
 }
 
 // `tl_numeric_to_tps` has no wire op (tag 32 reserved 2026-10-09); it is the
-// numeric half of `TlDisplayToTps`, covered here through the native API.
-#[test]
-fn tl_numeric_to_tps_basic() {
-    let out = phonetics::api::tl_numeric_to_tps("tiau5", false);
-    assert!(
-        !out.is_empty(),
-        "TL numeric → TPS should produce zhuyin: {out:?}"
-    );
-}
-
-#[test]
-fn tl_display_to_tps_uses_display_form() {
-    let resp = run(Method::TlDisplayToTps(TlDisplayToTps {
-        text: "tiâu".to_string(),
-        or_maps_to_er: false,
-    }));
-    let out = string_result(&resp);
-    assert!(
-        !out.is_empty(),
-        "TL display → TPS should produce zhuyin: {out:?}"
-    );
-}
+// numeric half of `api::tl_display_to_tps`, covered here through the native API.
 
 /// Default (`or_maps_to_er=false`) renders the vowel `or` as ㄛ (`\u{311b}`),
 /// matching the iOS pre-D9.4 default. Mirrors `TPSConverter.toTPS` /
@@ -400,11 +370,7 @@ fn tl_display_to_tps_converts_every_word_of_a_multi_word_reading() {
 /// also apply there.
 #[test]
 fn tl_display_to_tps_preserves_syllable_boundaries() {
-    let resp = run(Method::TlDisplayToTps(TlDisplayToTps {
-        text: "guá-guá".to_string(),
-        or_maps_to_er: false,
-    }));
-    let out = string_result(&resp);
+    let out = phonetics::api::tl_display_to_tps("guá-guá", false);
     assert_eq!(
         out.matches(' ').count(),
         1,

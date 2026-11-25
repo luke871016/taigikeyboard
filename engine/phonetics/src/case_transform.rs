@@ -1,25 +1,17 @@
-//! Case-transform module — POJ/TL tone-letter case mapping, candidate
-//! raising, nasal marker case adjustment.
+//! Case-transform module — tone-letter casing, candidate raising, nasal
+//! marker case adjustment.
 //!
-//! Cross-platform canonical for the case-transformation subsystem. Replaces
-//! the former iOS case transformer and tone utilities, plus the Android
-//! tone utilities (removed).
-//!
-//! Tone-letter case tables live in `case_tables` (POJ + TL); this module
-//! never re-implements them.
-//!
-//! `adjust_nasal_marker_case` is re-homed here from the former
-//! `case_adjust.rs` (formerly `pub(crate)`). The function keeps its existing
-//! contract; `case_adjust.rs` is removed in this slice.
+//! Rust `str::to_uppercase` / `to_lowercase` keep combining marks
+//! (`a̍` → `A̍`, `o̍͘` → `O̍͘`), so every Latin tone letter cases through the
+//! stdlib and the result is the same in every input mode. The one
+//! non-stdlib pair is the POJ nasal marker `ⁿ` ↔ `ᴺ`, which Unicode gives
+//! no case mapping.
 
 use std::borrow::Cow;
 
-use crate::api::InputMode;
-use crate::case_tables::{lower_to_upper, upper_to_lower};
-
-/// Three-state shift / case indicator. Mirrors iOS `LetterCase` enum and
-/// adapts Android's `(caps: Bool, capsLock: Bool)` pair at the bridge call
-/// site (CapsLock=true → CapsLocked; caps=true → Uppercased; else Lowercased).
+/// Three-state shift / case indicator, the wire `LetterCase` (`case.proto`).
+/// Android adapts its `(caps, capsLock)` pair in `CaseTransformBridge`
+/// (capsLock → CapsLocked; caps → Uppercased; else Lowercased).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LetterCase {
     Lowercased,
@@ -30,102 +22,47 @@ pub enum LetterCase {
 pub(crate) const NASAL_LOWER: char = '\u{207F}'; // ⁿ
 pub(crate) const NASAL_UPPER: char = '\u{1D3A}'; // ᴺ
 
-// =========================================================================
-// Per-char (single grapheme cluster) helpers
-// =========================================================================
-
-/// Uppercase a single char/grapheme using mode-aware tone tables. For
-/// multi-character inputs (e.g. "tsh") only the first letter is uppercased.
-/// Matches Android `ToneUtilities.uppercaseToneLetter` (`replaceFirstChar`)
-/// semantics.
-pub fn uppercase_tone_char(input: &str, mode: InputMode) -> String {
-    uppercase_internal(input, mode, /* all_chars */ false)
+/// Uppercase the first char of `input` and keep the rest as typed
+/// (`tsh` → `Tsh`, `a̍` → `A̍`); a lone `ⁿ` becomes `ᴺ`.
+pub fn uppercase_tone_char(input: &str) -> String {
+    if is_lone(input, NASAL_LOWER) {
+        return NASAL_UPPER.to_string();
+    }
+    crate::api::capitalize_first(input)
 }
 
-/// Uppercase ALL characters in `input` using mode-aware tone tables.
-/// Matches Android `ToneUtilities.fullUppercaseToneLetter` semantics.
-/// Used by Caps Lock paths.
-pub fn full_uppercase_tone_string(input: &str, mode: InputMode) -> String {
-    uppercase_internal(input, mode, /* all_chars */ true)
+/// Uppercase every char of `input` (Caps Lock, USER 2026-09-25: "shouldn't
+/// caps-lock make it all upper case?" → `óo` → `ÓO`); a lone `ⁿ` becomes `ᴺ`.
+pub fn full_uppercase_tone_string(input: &str) -> String {
+    if is_lone(input, NASAL_LOWER) {
+        return NASAL_UPPER.to_string();
+    }
+    input.to_uppercase()
 }
 
-fn uppercase_internal(input: &str, mode: InputMode, all_chars: bool) -> String {
-    // Nasal marker shortcut (mode-independent).
-    if input == "\u{207F}" {
-        return "\u{1D3A}".to_string();
+/// Lowercase every char of `input`; a lone `ᴺ` becomes `ⁿ`.
+pub fn lowercase_tone_char(input: &str) -> String {
+    if is_lone(input, NASAL_UPPER) {
+        return NASAL_LOWER.to_string();
     }
-
-    // Mode-specific tone-letter table lookup. Table values are first-letter
-    // upper (TL `óo` → `Óo`); Caps Lock raises the rest too (`ÓO`, USER
-    // 2026-09-25: "shouldn't caps-lock make it all upper case?", behavioral-invariants.md
-    // "CapsLock → all upper").
-    if let Some(map) = lower_to_upper(mode) {
-        if let Some(mapped) = map.get(input) {
-            return if all_chars {
-                mapped.to_uppercase()
-            } else {
-                (*mapped).to_string()
-            };
-        }
-    }
-
-    // Stdlib fallback.
-    if all_chars {
-        input.to_uppercase()
-    } else {
-        // Char count via grapheme-naive iteration is acceptable here because
-        // the table lookup above already handled all multi-codepoint
-        // sequences with combining marks; surviving inputs are ASCII or
-        // simple precomposed letters.
-        let chars: Vec<char> = input.chars().collect();
-        if chars.len() > 1 {
-            let mut s = String::with_capacity(input.len());
-            let mut iter = chars.into_iter();
-            if let Some(first) = iter.next() {
-                s.extend(first.to_uppercase());
-            }
-            for c in iter {
-                s.push(c);
-            }
-            s
-        } else {
-            input.to_uppercase()
-        }
-    }
-}
-
-/// Lowercase a single char/grapheme using mode-aware tone tables. Matches
-/// Android `ToneUtilities.lowercaseToneLetter`.
-pub fn lowercase_tone_char(input: &str, mode: InputMode) -> String {
-    // Nasal marker shortcut (mode-independent).
-    if input == "\u{1D3A}" {
-        return "\u{207F}".to_string();
-    }
-
-    // Mode-specific tone-letter table lookup.
-    if let Some(map) = upper_to_lower(mode) {
-        if let Some(mapped) = map.get(input) {
-            return (*mapped).to_string();
-        }
-    }
-
     input.to_lowercase()
 }
 
-// =========================================================================
-// Per-string compound transforms
-// =========================================================================
+/// `input` is exactly the one char `marker`.
+fn is_lone(input: &str, marker: char) -> bool {
+    let mut chars = input.chars();
+    chars.next() == Some(marker) && chars.next().is_none()
+}
 
-/// Apply `letter_case` to `text` per `CaseTransformer.transformForInput`
-/// semantics:
+/// Apply `letter_case` to a keystroke `text`:
 /// - `Lowercased`: lowercase via `lowercase_tone_char`
 /// - `Uppercased`: first letter upper (via `uppercase_tone_char`), rest lower
 /// - `CapsLocked`: full upper via `full_uppercase_tone_string`
-pub fn transform_input_case(text: &str, letter_case: LetterCase, mode: InputMode) -> String {
+pub fn transform_input_case(text: &str, letter_case: LetterCase) -> String {
     match letter_case {
-        LetterCase::CapsLocked => full_uppercase_tone_string(text, mode),
-        LetterCase::Uppercased => capitalize_first_letter(text, mode),
-        LetterCase::Lowercased => lowercase_tone_char(text, mode),
+        LetterCase::CapsLocked => full_uppercase_tone_string(text),
+        LetterCase::Uppercased => capitalize_first_letter(text),
+        LetterCase::Lowercased => lowercase_tone_char(text),
     }
 }
 
@@ -140,19 +77,15 @@ pub fn transform_input_case(text: &str, letter_case: LetterCase, mode: InputMode
 /// and lowering it to the keystroke's case threw those away (user report
 /// 2026-09-19). Every candidate-casing path ends here; only keystrokes
 /// go through [`transform_input_case`]. Under `CapsLocked` the POJ nasal
-/// `ⁿ` stays as-is (no uppercase hook in POJ) — the candidate path
+/// `ⁿ` stays as-is (stdlib has no case mapping for it) — the candidate path
 /// (`composing::continuous`) re-cases it afterwards via [`apply_nasal_marker_case`].
-pub fn raise_case(text: &str, letter_case: LetterCase, mode: InputMode) -> String {
+pub fn raise_case(text: &str, letter_case: LetterCase) -> String {
     match letter_case {
-        LetterCase::CapsLocked => full_uppercase_tone_string(text, mode),
-        LetterCase::Uppercased => uppercase_first_letter_in_text(text, mode),
+        LetterCase::CapsLocked => full_uppercase_tone_string(text),
+        LetterCase::Uppercased => uppercase_first_letter_in_text(text),
         LetterCase::Lowercased => text.to_string(),
     }
 }
-
-// =========================================================================
-// Nasal marker
-// =========================================================================
 
 /// Adjust nasal marker (`ⁿ`/`ᴺ`) case to match the preceding letter.
 ///
@@ -161,7 +94,6 @@ pub fn raise_case(text: &str, letter_case: LetterCase, mode: InputMode) -> Strin
 ///   letter scanned. Non-letter characters between the marker and the prior
 ///   letter (digits, punctuation) do not reset the carried case.
 ///
-/// Re-homed from the former `case_adjust.rs::adjust_nasal_marker_case`.
 /// Called in-band by `apply_nasal_marker_case` (the last step of
 /// `api::normalize_tone`), and through it by the candidate casing in
 /// `composing::continuous`.
@@ -215,38 +147,31 @@ pub fn lowercase_nasal_markers(text: &str) -> String {
     text.replace(NASAL_UPPER, "\u{207F}")
 }
 
-// =========================================================================
-// Internal helpers
-// =========================================================================
-
-/// Uppercase the literal first character (via `uppercase_tone_char`),
-/// lowercase the rest (per-char). Matches
-/// `CaseTransformer.capitalizeFirstLetter` (engine-side input pipeline).
-/// Used by `transform_input_case` `.uppercased` path.
-fn capitalize_first_letter(text: &str, mode: InputMode) -> String {
+/// Uppercase the literal first character, lowercase the rest (per char, so a
+/// `ᴺ` in the tail becomes `ⁿ`). Used by the `transform_input_case`
+/// `Uppercased` path.
+fn capitalize_first_letter(text: &str) -> String {
     let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let first_upper = uppercase_tone_char(&first.to_string(), mode);
-
-    // The "rest lowercase" applies per-char so combining-mark sequences in
-    // the tail also pass through the table.
-    let rest: String = chars.collect();
-    let rest_lower = to_lowercase_per_char(&rest, mode);
-    first_upper + &rest_lower
+    let mut result = String::with_capacity(text.len());
+    if let Some(first) = chars.next() {
+        push_upper(first, &mut result);
+    }
+    for ch in chars {
+        push_lower(ch, &mut result);
+    }
+    result
 }
 
-/// Find the first LETTER in `text` and uppercase it (via
-/// `uppercase_tone_char`); every other char passes through as stored.
-/// DISTINCT from `capitalize_first_letter` above — this skips leading
-/// non-letters (e.g. "-gí" → "-Gí" not "-gí") and never lowers the rest.
-fn uppercase_first_letter_in_text(text: &str, mode: InputMode) -> String {
+/// Find the first LETTER in `text` and uppercase it; every other char passes
+/// through as stored. DISTINCT from `capitalize_first_letter` above — this
+/// skips leading non-letters (e.g. "-gí" → "-Gí" not "-gí") and never lowers
+/// the rest.
+fn uppercase_first_letter_in_text(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut is_first_letter = true;
     for ch in text.chars() {
         if ch.is_alphabetic() && is_first_letter {
-            result.push_str(&uppercase_tone_char(&ch.to_string(), mode));
+            push_upper(ch, &mut result);
             is_first_letter = false;
         } else {
             result.push(ch);
@@ -259,7 +184,7 @@ fn uppercase_first_letter_in_text(text: &str, mode: InputMode) -> String {
 /// the Nth letter of `source` is uppercase, otherwise kept as stored
 /// (raise-only, see [`raise_case`]). Non-letters pass through unchanged,
 /// so a tone placed as a combining mark never shifts the alignment.
-pub fn match_case(target: &str, source: &str, mode: InputMode) -> String {
+pub fn match_case(target: &str, source: &str) -> String {
     let mut source_letters = source.chars().filter(|c| c.is_alphabetic());
     let mut result = String::with_capacity(target.len());
     for ch in target.chars() {
@@ -268,26 +193,35 @@ pub fn match_case(target: &str, source: &str, mode: InputMode) -> String {
             continue;
         }
         match source_letters.next() {
-            Some(src) if src.is_uppercase() => {
-                result.push_str(&uppercase_tone_char(&ch.to_string(), mode));
-            }
+            Some(src) if src.is_uppercase() => push_upper(ch, &mut result),
             _ => result.push(ch),
         }
     }
     result
 }
 
-fn to_lowercase_per_char(text: &str, mode: InputMode) -> String {
-    text.chars()
-        .map(|ch| lowercase_tone_char(&ch.to_string(), mode))
-        .collect()
+/// One char through [`uppercase_tone_char`], appended to `out`.
+fn push_upper(ch: char, out: &mut String) {
+    if ch == NASAL_LOWER {
+        out.push(NASAL_UPPER);
+    } else {
+        out.extend(ch.to_uppercase());
+    }
+}
+
+/// One char through [`lowercase_tone_char`], appended to `out`.
+fn push_lower(ch: char, out: &mut String) {
+    if ch == NASAL_UPPER {
+        out.push(NASAL_LOWER);
+    } else {
+        out.extend(ch.to_lowercase());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------
     #[test]
     fn apply_nasal_marker_case_follows_the_switch_and_borrows_when_unchanged() {
         assert_eq!(
@@ -312,9 +246,6 @@ mod tests {
             Cow::Borrowed(_)
         ));
     }
-
-    // adjust_nasal_marker_case — moved from case_adjust.rs verbatim
-    // -----------------------------------------------------------------
 
     #[test]
     fn nasal_passthrough_when_no_marker() {
@@ -341,136 +272,80 @@ mod tests {
         assert_eq!(adjust_nasal_marker_case("\u{1D3A}"), "\u{207F}");
     }
 
-    // -----------------------------------------------------------------
-    // Per-char helpers
-    // -----------------------------------------------------------------
-
     #[test]
-    fn uppercase_tone_char_uses_tone_table_for_combining_mark() {
-        assert_eq!(uppercase_tone_char("a̍", InputMode::Poj), "A̍");
-        assert_eq!(uppercase_tone_char("o̍͘", InputMode::Poj), "O̍͘");
+    fn uppercase_tone_char_keeps_combining_marks() {
+        assert_eq!(uppercase_tone_char("a̍"), "A̍");
+        assert_eq!(uppercase_tone_char("o̍͘"), "O̍͘");
     }
 
     #[test]
-    fn full_uppercase_tone_string_uppercases_all() {
-        assert_eq!(full_uppercase_tone_string("tsh", InputMode::Tl), "TSH");
+    fn caps_lock_raises_every_letter_of_tl_oo() {
+        // trace: stdlib to_uppercase("óo") → "ÓO"
+        assert_eq!(full_uppercase_tone_string("óo"), "ÓO");
+        assert_eq!(full_uppercase_tone_string("o̍o"), "O̍O");
+        assert_eq!(transform_input_case("óo", LetterCase::CapsLocked), "ÓO");
+        assert_eq!(raise_case("óo", LetterCase::CapsLocked), "ÓO");
     }
 
     #[test]
-    fn caps_lock_raises_every_letter_of_a_tl_oo_table_entry() {
-        // trace: table "óo"→"Óo" (first-letter upper), all_chars → to_uppercase → "ÓO"
-        assert_eq!(full_uppercase_tone_string("óo", InputMode::Tl), "ÓO");
-        assert_eq!(full_uppercase_tone_string("o̍o", InputMode::Tl), "O̍O");
-        assert_eq!(
-            transform_input_case("óo", LetterCase::CapsLocked, InputMode::Tl),
-            "ÓO"
-        );
-        assert_eq!(
-            raise_case("óo", LetterCase::CapsLocked, InputMode::Tl),
-            "ÓO"
-        );
-    }
-
-    #[test]
-    fn shift_keeps_a_tl_oo_table_entry_first_letter_only() {
-        assert_eq!(uppercase_tone_char("óo", InputMode::Tl), "Óo");
-        assert_eq!(
-            transform_input_case("óo", LetterCase::Uppercased, InputMode::Tl),
-            "Óo"
-        );
+    fn shift_raises_only_the_first_letter_of_tl_oo() {
+        assert_eq!(uppercase_tone_char("óo"), "Óo");
+        assert_eq!(transform_input_case("óo", LetterCase::Uppercased), "Óo");
     }
 
     #[test]
     fn caps_lock_tl_oo_lowercases_back() {
-        // trace: "ÓO" misses the reverse table ("Óo" only) → stdlib lowercase
-        assert_eq!(lowercase_tone_char("ÓO", InputMode::Tl), "óo");
+        // trace: stdlib to_lowercase("ÓO") → "óo"
+        assert_eq!(lowercase_tone_char("ÓO"), "óo");
     }
 
     #[test]
     fn uppercase_tone_char_first_only_for_multi_char() {
-        assert_eq!(uppercase_tone_char("tsh", InputMode::Tl), "Tsh");
+        assert_eq!(uppercase_tone_char("tsh"), "Tsh");
     }
 
     #[test]
-    fn lowercase_tone_char_uses_tone_table() {
-        assert_eq!(lowercase_tone_char("Á", InputMode::Poj), "á");
+    fn nasal_marker_has_its_own_case_pair() {
+        assert_eq!(uppercase_tone_char("\u{207F}"), "\u{1D3A}");
+        assert_eq!(lowercase_tone_char("\u{1D3A}"), "\u{207F}");
     }
-
-    #[test]
-    fn nasal_marker_shortcut_is_mode_independent() {
-        assert_eq!(uppercase_tone_char("\u{207F}", InputMode::Tl), "\u{1D3A}");
-        assert_eq!(lowercase_tone_char("\u{1D3A}", InputMode::Poj), "\u{207F}");
-    }
-
-    // -----------------------------------------------------------------
-    // transform_input_case
-    // -----------------------------------------------------------------
 
     #[test]
     fn transform_input_caps_lock_uppercases_all() {
-        assert_eq!(
-            transform_input_case("tsh", LetterCase::CapsLocked, InputMode::Tl),
-            "TSH"
-        );
+        assert_eq!(transform_input_case("tsh", LetterCase::CapsLocked), "TSH");
     }
 
     #[test]
     fn transform_input_uppercased_capitalizes_first() {
-        assert_eq!(
-            transform_input_case("tsh", LetterCase::Uppercased, InputMode::Tl),
-            "Tsh"
-        );
+        assert_eq!(transform_input_case("tsh", LetterCase::Uppercased), "Tsh");
     }
 
     #[test]
-    fn transform_input_lowercased_passthrough() {
-        assert_eq!(
-            transform_input_case("Tsh", LetterCase::Lowercased, InputMode::Tl),
-            "tsh"
-        );
+    fn transform_input_lowercased_lowercases() {
+        assert_eq!(transform_input_case("Tsh", LetterCase::Lowercased), "tsh");
     }
 
-    // -----------------------------------------------------------------
     // Stored capitals survive (user report 2026-09-19: custom entry
     // `Keng-lâm Su-īⁿ` under abbreviation `klsi`)
-    // -----------------------------------------------------------------
 
     const CUSTOM: &str = "Keng-lâm Su-īⁿ";
 
     #[test]
     fn raise_case_lowercased_keeps_stored_capitals() {
-        assert_eq!(
-            raise_case(CUSTOM, LetterCase::Lowercased, InputMode::Poj),
-            CUSTOM
-        );
-        assert_eq!(
-            raise_case("tâi-gí", LetterCase::Lowercased, InputMode::Poj),
-            "tâi-gí"
-        );
+        assert_eq!(raise_case(CUSTOM, LetterCase::Lowercased), CUSTOM);
+        assert_eq!(raise_case("tâi-gí", LetterCase::Lowercased), "tâi-gí");
     }
 
     #[test]
     fn raise_case_uppercased_raises_first_letter_only() {
-        assert_eq!(
-            raise_case(CUSTOM, LetterCase::Uppercased, InputMode::Poj),
-            CUSTOM
-        );
-        assert_eq!(
-            raise_case("tâi-gí", LetterCase::Uppercased, InputMode::Poj),
-            "Tâi-gí"
-        );
+        assert_eq!(raise_case(CUSTOM, LetterCase::Uppercased), CUSTOM);
+        assert_eq!(raise_case("tâi-gí", LetterCase::Uppercased), "Tâi-gí");
         // First LETTER, not first char.
-        assert_eq!(
-            raise_case("-gí", LetterCase::Uppercased, InputMode::Poj),
-            "-Gí"
-        );
+        assert_eq!(raise_case("-gí", LetterCase::Uppercased), "-Gí");
     }
 
     #[test]
     fn raise_case_caps_locked_uppercases_all() {
-        assert_eq!(
-            raise_case(CUSTOM, LetterCase::CapsLocked, InputMode::Poj),
-            "KENG-LÂM SU-Īⁿ"
-        );
+        assert_eq!(raise_case(CUSTOM, LetterCase::CapsLocked), "KENG-LÂM SU-Īⁿ");
     }
 }

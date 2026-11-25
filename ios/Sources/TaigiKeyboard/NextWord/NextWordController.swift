@@ -240,6 +240,7 @@ final class NextWordController {
                     candidateDisplayMode: settings.candidateDisplayMode,
                     syllableSeparator: settings.syllableSeparator,
                     isKhinsiannInHanjiEnabled: settings.isKhinsiannInHanjiEnabled,
+                    isHanLoMixedEnabled: settings.isHanLoMixedEnabled,
                     generation: envelope,
                 )
             }.value
@@ -289,8 +290,7 @@ final class NextWordController {
     /// `clearDisplay` / `resetAndClearUI` always cleared without a main-queue
     /// hop. Routing through `DispatchQueue.main.async` would open a race
     /// where a stale clear runs after a newer prediction query has rendered.
-    /// `generation` from the effect is informational; main-thread invariant
-    /// (above) keeps this safe.
+    /// The main-thread invariant (above) keeps this safe.
     private func clearPredictionsUIEffect() {
         contextUpdater?.resetNextWordSuggestions()
         cachedPredictionsVisible = false

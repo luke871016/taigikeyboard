@@ -217,8 +217,9 @@ impl CustomDictionaryStore {
     }
 
     /// The entries one of whose search keys EQUALS one of `query_keys` — the
-    /// toneless bodies of a TPS walk's edges
-    /// (`phonetics::api::tps_toneless_edge_key`), so a custom word anywhere in
+    /// toneless bodies of a walk's edges (`phonetics::api::toneless_edge_key`:
+    /// a TPS conversion walk, a TL / POJ fetch's sentence walk), so a custom
+    /// word anywhere in
     /// the walked text meets its edge — at most `limit` per key, each entry
     /// once, in one read: the store answers every key or none. Best-effort
     /// like [`keystroke_rows`](Self::keystroke_rows).
@@ -519,7 +520,7 @@ impl CustomDictionaryStore {
     /// identical both stay (a repair never deletes a word). Each rewrite is
     /// conditional on the row still being the one read, so an edit made in
     /// between — or another process that already normalised — wins.
-    pub fn normalize_stored_rows_if_needed(&self) -> Result<(), CustomDictionaryError> {
+    fn normalize_stored_rows_if_needed(&self) -> Result<(), CustomDictionaryError> {
         type Columns = (String, String);
         let stale: Vec<(String, Columns, Columns)> = self
             .database

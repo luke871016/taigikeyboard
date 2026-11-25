@@ -251,7 +251,7 @@ pub(crate) fn build_continuous_keys(
 /// v3.5.9 A1 — extracted from the pre-A1 key-building
 /// loop. Emit ONLY the lattice's left-anchored (`start == 0`)
 /// projection as keys, byte-identical to the pre-S1 single-start
-/// `valid_span_endings(shadow, 0, …)` output (`build_lattice` sorts
+/// `valid_span_endings(shadow, 0, …)` output (`build_lattice_with_barriers` sorts
 /// edges so the `start == 0` ones come first in ascending-`end`
 /// order), so the span-local candidate / commit path is unchanged
 /// from S1.
@@ -263,9 +263,9 @@ pub(crate) fn build_continuous_keys(
 /// Model-B-consistent commit. S2's whole-sentence walker consumes
 /// the interior edges INTERNALLY (via
 /// [`build_shadow_lattice_with_barriers`] + `crate::lattice::walk_best`
-/// in `fetch_walker_slot0`) and emits one
+/// in `continuous::walk_buffer`) and emits one
 /// synthesized full-buffer best path explicitly prepended at slot 0
-/// by `handle_fetch_at_pos`; the user-facing commit span stays
+/// by `continuous::assemble_candidates`; the user-facing commit span stays
 /// `(0, end)`. Interior `台語`-style words remain reachable as the
 /// next path-step after the prefix is nailed (Codex pre-impl S2
 /// Q1c = option ii, 2026-05-16; `docs/releases/v3.5.8/plan.md` §整句 lattice + walker).
@@ -293,7 +293,7 @@ pub(crate) fn left_anchored_keys_and_restrictions(
     // v3.5.9 B-2 — `mode` selects the FST key family the emitted keys are
     // namespaced into ([`span_key`]). The lattice itself was already built
     // against the matching `SyllableInventory` family
-    // ([`build_shadow_lattice_with_barriers`] → [`build_lattice`]), so the
+    // ([`build_shadow_lattice_with_barriers`] → `build_lattice_with_barriers`), so the
     // syllabification and the key namespace come from a single mode
     // parameter — they cannot drift.
 
@@ -307,10 +307,10 @@ pub(crate) fn left_anchored_keys_and_restrictions(
     // explicit-tone case (§17).
     //
     // The single-syllable ends are recomputed via the SAME `max_syllables = 1`
-    // primitive `build_lattice` chains (`lattice.edges()` flattens depth, so a
+    // primitive `build_lattice_with_barriers` chains (`lattice.edges()` flattens depth, so a
     // `(0, end)` edge cannot be told apart from a chain reaching `end` —
     // re-running the depth-1 walk is the only way to isolate true single
-    // syllables). Lowercasing once mirrors `build_lattice`, which also
+    // syllables). Lowercasing once mirrors `build_lattice_with_barriers`, which also
     // re-lowercases the shadow before walking.
     //
     // An end is suppressed only when it is (a) a single-syllable end, (b) not
@@ -323,7 +323,7 @@ pub(crate) fn left_anchored_keys_and_restrictions(
     // for the reported bug (`ta`/`tsu` have no interior predecessor), but (c)
     // makes the rule provably never drop a phrase candidate. Display layer
     // only: the lattice keeps every edge, so the walker
-    // (`fetch_walker_slot0_inner`) + min-hop `span_min_syllable_count` still
+    // (`walk_buffer`) + min-hop `span_min_syllable_count` still
     // see every split (non-greedy `ta`+`nia` recovery, Codex PR #290 P1,
     // unaffected).
     //
@@ -781,7 +781,7 @@ pub(crate) fn greedy_longest_syllabification(
 /// the **guaranteed** syllable count of `shadow_span`: the minimum
 /// number of single-syllable hops to cover it. Each hop is one valid
 /// syllable from `valid_span_endings_lowered(.., max_syllables = 1)` —
-/// the same per-syllable step `lattice::builder::build_lattice` relies
+/// the same per-syllable step `lattice::builder::build_lattice_with_barriers` relies
 /// on (it calls `valid_span_endings_lowered(.., max_syllables = 8)`,
 /// whose internal BFS itself advances exactly one valid syllable per
 /// depth level, so an emitted edge is a chain of these single hops).
@@ -798,7 +798,7 @@ pub(crate) fn greedy_longest_syllabification(
 /// span still lattice-syllabifiable via a *non-greedy* split, and the
 /// old `unwrap_or(1)` then under-counted a multi-syllable OOV span. A
 /// min-hop BFS over the builder's own single-syllable steps cannot
-/// dead-end on a real lattice edge: `build_lattice` emits
+/// dead-end on a real lattice edge: `build_lattice_with_barriers` emits
 /// `(start, end)` only by chaining exactly those hops, so a hop-path
 /// `0 → len` provably exists and the BFS returns `Some(>= 1)`. Min-hop
 /// (not greedy / not max) is the fewest-syllable valid reading — it is
@@ -806,7 +806,7 @@ pub(crate) fn greedy_longest_syllabification(
 /// (correct), never collapsing a genuinely multi-syllable span to `1`.
 ///
 /// `None` only if `len` is not single-syllable-reachable at all —
-/// impossible for an edge this same `build_lattice` produced over the
+/// impossible for an edge this same `build_lattice_with_barriers` produced over the
 /// same `shadow`/`inv` (Codex pre-impl Q1/Q2 OK); the caller treats
 /// `None` as a broken edge/provider invariant and fail-closed **drops
 /// the edge** rather than mispricing it (the buffer is still spanned
@@ -828,8 +828,8 @@ pub(crate) fn span_min_syllable_count(
     // single-hop primitive the lattice builder chains under the same
     // `mode`. v3.5.9 B-2 plumbs `mode` through here so a POJ shadow
     // walks the `poj:` family for hop counts, matching the family used
-    // by [`build_lattice`] to produce the edge in the first place; the
-    // hop-count invariant (`build_lattice` emits `(start, end)` only by
+    // by `build_lattice_with_barriers` to produce the edge in the first place; the
+    // hop-count invariant (`build_lattice_with_barriers` emits `(start, end)` only by
     // chaining single hops) holds per-family.
     use std::collections::{BTreeMap, VecDeque};
     let mut dist: BTreeMap<usize, usize> = BTreeMap::new();
@@ -857,7 +857,7 @@ pub(crate) fn span_min_syllable_count(
 /// derived form does not land in `[a-z]+` after canonicalization.
 ///
 /// MUST produce a key byte-identical to the one
-/// `continuous::fetch_walker_slot0_inner`'s edge provider builds for a
+/// `continuous::walk_buffer`'s edge provider builds for a
 /// syllable span (`{prefix}{toneless}`, the colon-carrying `tl:` / `poj:` /
 /// `tps:` prefix of `KeyFamily::for_input_mode(mode)`; v3.5.9 B-2 PR #309 promoted POJ to a
 /// first-class FST key family, pre-B-2 every key prefixed `tl:`).
@@ -878,7 +878,7 @@ pub(crate) fn span_min_syllable_count(
 /// edge key, so it simply stays a span-local candidate and never
 /// enters the walker.
 ///
-/// `mode` MUST be the same value `continuous::fetch_walker_slot0_inner`
+/// `mode` MUST be the same value `continuous::assemble_candidates`
 /// passes to [`build_shadow_lattice_with_barriers`] for this fetch: the canonicalize
 /// step is mode-gated — TL/English mode folds POJ→TL (`ch→ts`,
 /// `oa→ua`, ...) and emits `tl:`, POJ mode keeps POJ ASCII (no fold)
@@ -903,7 +903,7 @@ pub(crate) fn custom_toneless_key(roman: &str, mode: InputMode) -> Option<String
         // TPS user types for it, and the dictionary's own `tps:` face
         // (`phonetics::tps_notone_from_tl`). A Bopomofo row keys as typed.
         InputMode::Tps if phonetics::api::stored_roman_mode(roman, mode) == InputMode::Tl => {
-            phonetics::tps_notone_from_tl(&phonetics::api::custom_search_reading(roman))
+            phonetics::tps_notone_from_tl(&phonetics::api::custom_tps_reading(roman))
         }
         InputMode::Tps => roman.to_owned(),
         InputMode::Tl | InputMode::Poj | InputMode::English => roman.replace(' ', "-"),
@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn custom_toneless_key_tps_keys_a_latin_reading_by_its_bopomofo_face() {
-        // trace: 陳三 `Tân Sann` → custom_search_reading (TL, unchanged) →
+        // trace: 陳三 `Tân Sann` → custom_tps_reading (TL, unchanged) →
         // tps_notone_from_tl → `ㄉㄢㄙㆩ`; the typed `ㄉㄢˊㄙㆩ` strips its ˊ
         // to the same body. POJ `Tân Saⁿ` folds to the same TL first.
         let typed = custom_toneless_key("ㄉㄢˊㄙㆩ", InputMode::Tps);
@@ -1423,6 +1423,18 @@ mod tests {
         assert_eq!(custom_toneless_key("Tân Sann", InputMode::Tps), typed);
         assert_eq!(custom_toneless_key("tân-sann", InputMode::Tps), typed);
         assert_eq!(custom_toneless_key("Tân Saⁿ", InputMode::Tps), typed);
+    }
+
+    #[test]
+    fn custom_toneless_key_tps_skips_a_number_token() {
+        // trace: `Tâi-uân 101` → custom_tps_reading drops `101` → `Tâi-uân` →
+        // tps_notone_from_tl → `ㄉㄞㄨㄢ` (t ㄉ ai ㄞ · u ㄨ an ㄢ). Without the
+        // drop the face was `ㄉㄞㄨㄢ01`, failed the Bopomofo body gate, and the
+        // row never reached the walker.
+        let typed = custom_toneless_key("ㄉㄞˊㄨㄢˊ", InputMode::Tps);
+        assert_eq!(typed.as_deref(), Some("tps:ㄉㄞㄨㄢ"));
+        assert_eq!(custom_toneless_key("Tâi-uân 101", InputMode::Tps), typed);
+        assert_eq!(custom_toneless_key("123", InputMode::Tps), None);
     }
 
     #[test]
@@ -1455,8 +1467,6 @@ mod tests {
             Some("tl:chiah"),
         );
     }
-
-    // ----- v3.5.8 Phase 9 Item 10 — partial-prefix key derivation -----
 
     #[test]
     fn build_partial_prefix_key_passes_ascii_through() {
@@ -1637,8 +1647,6 @@ mod tests {
         assert!(build_partial_prefix_key("\u{0307}", InputMode::Tps).is_none());
     }
 
-    // ----- B2 (§17 TPS) span_is_fully_toned_tps + fst_body_for_span -----
-
     #[test]
     fn span_is_fully_toned_tps_single_marked_tone_is_toned() {
         // Each mark-bearing tone (2/3/5/6/7/8/9) closes the syllable.
@@ -1727,8 +1735,6 @@ mod tests {
         ));
     }
 
-    // ----- v3.5.8 S5 — no-dict carve-out (greedy + min-hop helpers) -----
-
     // Hermetic `SyllableInventory` builder. Pins the carve-out helper
     // without the `LexiconHandle` singleton (Codex post-impl S5 P3,
     // 2026-05-17).
@@ -1779,7 +1785,6 @@ mod tests {
         SyllableInventory::open(&path).expect("open inventory")
     }
 
-    // ---- §52 typed `-` is a syllable boundary (USER 2026-09-22) ----
     // Inventory mirrors production around `khi|ah`: every strict prefix
     // of `khiah` that is itself a syllable (`khi`, `khia`) is present, so
     // the greedy reading has something wrong to prefer.

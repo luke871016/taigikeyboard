@@ -25,7 +25,6 @@ public  final class NextWordRequest extends
     CONTEXT_TIMEOUT_FIRED(12),
     CLEAR_FOR_NEW_COMPOSING(13),
     RESET_ALL(14),
-    UPDATE_LAST_SELECTED_WORD(15),
     SET_PREDICTIONS_VISIBLE(16),
     FILTER_PREDICTIONS(20),
     PREDICT_NEXT(22),
@@ -49,7 +48,6 @@ public  final class NextWordRequest extends
         case 12: return CONTEXT_TIMEOUT_FIRED;
         case 13: return CLEAR_FOR_NEW_COMPOSING;
         case 14: return RESET_ALL;
-        case 15: return UPDATE_LAST_SELECTED_WORD;
         case 16: return SET_PREDICTIONS_VISIBLE;
         case 20: return FILTER_PREDICTIONS;
         case 22: return PREDICT_NEXT;
@@ -76,10 +74,6 @@ public  final class NextWordRequest extends
 
   public static final int WORD_SELECTED_FIELD_NUMBER = 10;
   /**
-   * <pre>
-   * --- State-mutating intents (10s) — return DecideResult ---
-   * </pre>
-   *
    * <code>.taigi.engine.WordSelected word_selected = 10;</code>
    */
   @java.lang.Override
@@ -87,10 +81,6 @@ public  final class NextWordRequest extends
     return methodCase_ == 10;
   }
   /**
-   * <pre>
-   * --- State-mutating intents (10s) — return DecideResult ---
-   * </pre>
-   *
    * <code>.taigi.engine.WordSelected word_selected = 10;</code>
    */
   @java.lang.Override
@@ -101,10 +91,6 @@ public  final class NextWordRequest extends
     return com.siansiansu.taigikeyboard.engine.proto.WordSelected.getDefaultInstance();
   }
   /**
-   * <pre>
-   * --- State-mutating intents (10s) — return DecideResult ---
-   * </pre>
-   *
    * <code>.taigi.engine.WordSelected word_selected = 10;</code>
    */
   private void setWordSelected(com.siansiansu.taigikeyboard.engine.proto.WordSelected value) {
@@ -113,10 +99,6 @@ public  final class NextWordRequest extends
     methodCase_ = 10;
   }
   /**
-   * <pre>
-   * --- State-mutating intents (10s) — return DecideResult ---
-   * </pre>
-   *
    * <code>.taigi.engine.WordSelected word_selected = 10;</code>
    */
   private void mergeWordSelected(com.siansiansu.taigikeyboard.engine.proto.WordSelected value) {
@@ -131,10 +113,6 @@ public  final class NextWordRequest extends
     methodCase_ = 10;
   }
   /**
-   * <pre>
-   * --- State-mutating intents (10s) — return DecideResult ---
-   * </pre>
-   *
    * <code>.taigi.engine.WordSelected word_selected = 10;</code>
    */
   private void clearWordSelected() {
@@ -344,81 +322,6 @@ public  final class NextWordRequest extends
     }
   }
 
-  public static final int UPDATE_LAST_SELECTED_WORD_FIELD_NUMBER = 15;
-  /**
-   * <pre>
-   * Continuous nail / unnail handshake — learns nothing and changes no
-   * state (see the message below).
-   * </pre>
-   *
-   * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-   */
-  @java.lang.Override
-  public boolean hasUpdateLastSelectedWord() {
-    return methodCase_ == 15;
-  }
-  /**
-   * <pre>
-   * Continuous nail / unnail handshake — learns nothing and changes no
-   * state (see the message below).
-   * </pre>
-   *
-   * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-   */
-  @java.lang.Override
-  public com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord getUpdateLastSelectedWord() {
-    if (methodCase_ == 15) {
-       return (com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord) method_;
-    }
-    return com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord.getDefaultInstance();
-  }
-  /**
-   * <pre>
-   * Continuous nail / unnail handshake — learns nothing and changes no
-   * state (see the message below).
-   * </pre>
-   *
-   * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-   */
-  private void setUpdateLastSelectedWord(com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord value) {
-    java.util.Objects.requireNonNull(value);
-    method_ = value;
-    methodCase_ = 15;
-  }
-  /**
-   * <pre>
-   * Continuous nail / unnail handshake — learns nothing and changes no
-   * state (see the message below).
-   * </pre>
-   *
-   * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-   */
-  private void mergeUpdateLastSelectedWord(com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord value) {
-    java.util.Objects.requireNonNull(value);
-    if (methodCase_ == 15 &&
-        method_ != com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord.getDefaultInstance()) {
-      method_ = com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord.newBuilder((com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord) method_)
-          .mergeFrom(value).buildPartial();
-    } else {
-      method_ = value;
-    }
-    methodCase_ = 15;
-  }
-  /**
-   * <pre>
-   * Continuous nail / unnail handshake — learns nothing and changes no
-   * state (see the message below).
-   * </pre>
-   *
-   * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-   */
-  private void clearUpdateLastSelectedWord() {
-    if (methodCase_ == 15) {
-      methodCase_ = 0;
-      method_ = null;
-    }
-  }
-
   public static final int SET_PREDICTIONS_VISIBLE_FIELD_NUMBER = 16;
   /**
    * <pre>
@@ -532,7 +435,6 @@ public  final class NextWordRequest extends
   public static final int FILTER_PREDICTIONS_FIELD_NUMBER = 20;
   /**
    * <pre>
-   * --- Pure post-query helpers (20s) ---
    * Pure post-query filter+merge+sort+limit — return FilterResult
    * (handles stale-gen drop).
    * </pre>
@@ -545,7 +447,6 @@ public  final class NextWordRequest extends
   }
   /**
    * <pre>
-   * --- Pure post-query helpers (20s) ---
    * Pure post-query filter+merge+sort+limit — return FilterResult
    * (handles stale-gen drop).
    * </pre>
@@ -561,7 +462,6 @@ public  final class NextWordRequest extends
   }
   /**
    * <pre>
-   * --- Pure post-query helpers (20s) ---
    * Pure post-query filter+merge+sort+limit — return FilterResult
    * (handles stale-gen drop).
    * </pre>
@@ -575,7 +475,6 @@ public  final class NextWordRequest extends
   }
   /**
    * <pre>
-   * --- Pure post-query helpers (20s) ---
    * Pure post-query filter+merge+sort+limit — return FilterResult
    * (handles stale-gen drop).
    * </pre>
@@ -595,7 +494,6 @@ public  final class NextWordRequest extends
   }
   /**
    * <pre>
-   * --- Pure post-query helpers (20s) ---
    * Pure post-query filter+merge+sort+limit — return FilterResult
    * (handles stale-gen drop).
    * </pre>
@@ -799,10 +697,6 @@ public  final class NextWordRequest extends
 
 
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     @java.lang.Override
@@ -810,10 +704,6 @@ public  final class NextWordRequest extends
       return instance.hasWordSelected();
     }
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     @java.lang.Override
@@ -821,10 +711,6 @@ public  final class NextWordRequest extends
       return instance.getWordSelected();
     }
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     public Builder setWordSelected(com.siansiansu.taigikeyboard.engine.proto.WordSelected value) {
@@ -833,10 +719,6 @@ public  final class NextWordRequest extends
       return this;
     }
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     public Builder setWordSelected(
@@ -846,10 +728,6 @@ public  final class NextWordRequest extends
       return this;
     }
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     public Builder mergeWordSelected(com.siansiansu.taigikeyboard.engine.proto.WordSelected value) {
@@ -858,10 +736,6 @@ public  final class NextWordRequest extends
       return this;
     }
     /**
-     * <pre>
-     * --- State-mutating intents (10s) — return DecideResult ---
-     * </pre>
-     *
      * <code>.taigi.engine.WordSelected word_selected = 10;</code>
      */
     public Builder clearWordSelected() {
@@ -1064,84 +938,6 @@ public  final class NextWordRequest extends
 
     /**
      * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    @java.lang.Override
-    public boolean hasUpdateLastSelectedWord() {
-      return instance.hasUpdateLastSelectedWord();
-    }
-    /**
-     * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    @java.lang.Override
-    public com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord getUpdateLastSelectedWord() {
-      return instance.getUpdateLastSelectedWord();
-    }
-    /**
-     * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    public Builder setUpdateLastSelectedWord(com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord value) {
-      copyOnWrite();
-      instance.setUpdateLastSelectedWord(value);
-      return this;
-    }
-    /**
-     * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    public Builder setUpdateLastSelectedWord(
-        com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord.Builder builderForValue) {
-      copyOnWrite();
-      instance.setUpdateLastSelectedWord(builderForValue.build());
-      return this;
-    }
-    /**
-     * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    public Builder mergeUpdateLastSelectedWord(com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord value) {
-      copyOnWrite();
-      instance.mergeUpdateLastSelectedWord(value);
-      return this;
-    }
-    /**
-     * <pre>
-     * Continuous nail / unnail handshake — learns nothing and changes no
-     * state (see the message below).
-     * </pre>
-     *
-     * <code>.taigi.engine.UpdateLastSelectedWord update_last_selected_word = 15;</code>
-     */
-    public Builder clearUpdateLastSelectedWord() {
-      copyOnWrite();
-      instance.clearUpdateLastSelectedWord();
-      return this;
-    }
-
-    /**
-     * <pre>
      * Platform-driven UI visibility update. After the platform renders the
      * result of an async predict() call (or clears it on empty result), it
      * pushes the resulting visibility back to the engine via this intent so
@@ -1262,7 +1058,6 @@ public  final class NextWordRequest extends
 
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1275,7 +1070,6 @@ public  final class NextWordRequest extends
     }
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1288,7 +1082,6 @@ public  final class NextWordRequest extends
     }
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1302,7 +1095,6 @@ public  final class NextWordRequest extends
     }
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1317,7 +1109,6 @@ public  final class NextWordRequest extends
     }
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1331,7 +1122,6 @@ public  final class NextWordRequest extends
     }
     /**
      * <pre>
-     * --- Pure post-query helpers (20s) ---
      * Pure post-query filter+merge+sort+limit — return FilterResult
      * (handles stale-gen drop).
      * </pre>
@@ -1451,14 +1241,13 @@ public  final class NextWordRequest extends
             com.siansiansu.taigikeyboard.engine.proto.ContextTimeoutFired.class,
             com.siansiansu.taigikeyboard.engine.proto.ClearForNewComposing.class,
             com.siansiansu.taigikeyboard.engine.proto.ResetAll.class,
-            com.siansiansu.taigikeyboard.engine.proto.UpdateLastSelectedWord.class,
             com.siansiansu.taigikeyboard.engine.proto.SetPredictionsVisible.class,
             com.siansiansu.taigikeyboard.engine.proto.FilterPredictions.class,
             com.siansiansu.taigikeyboard.engine.proto.PredictNext.class,
           };
           java.lang.String info =
-              "\u0000\t\u0001\u0000\n\u0016\t\u0000\u0000\u0000\n<\u0000\u000b<\u0000\f<\u0000\r" +
-              "<\u0000\u000e<\u0000\u000f<\u0000\u0010<\u0000\u0014<\u0000\u0016<\u0000";
+              "\u0000\b\u0001\u0000\n\u0016\b\u0000\u0000\u0000\n<\u0000\u000b<\u0000\f<\u0000\r" +
+              "<\u0000\u000e<\u0000\u0010<\u0000\u0014<\u0000\u0016<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       case GET_DEFAULT_INSTANCE: {

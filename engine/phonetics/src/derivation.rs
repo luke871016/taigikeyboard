@@ -6,8 +6,8 @@
 //! build and the custom-dict search keys share.
 //!
 //! Whitespace canonical for `derive_abbrev` = `[ \t\n\x0B\f\r-]+` literal
-//! (ASCII whitespace + hyphen). Matches Android JVM `Regex("[\\s-]+")`
-//! semantics; preserves NBSP (U+00A0) as non-delimiter per Codex v3 §1.
+//! (ASCII whitespace + hyphen), the JVM `Regex("[\\s-]+")` set;
+//! preserves NBSP (U+00A0) as non-delimiter per Codex v3 §1.
 //!
 //! Combining-mark / NFD logic for InputNormalizer + ToneRestoration lives
 //! in `normalization.rs` — different concerns, different module.
@@ -109,6 +109,9 @@ fn leading_unit(syllable: &str) -> String {
 /// POJ display (`tsia̍h-pn̄g` → `chia̍h-pn̄g` → `chp`), as
 /// `dictionary/common/stages/abbrev.py` derives it from the `poj` column.
 /// Sibling of [`crate::tps_abbrev_from_tl`] for the third family.
+///
+/// Public only for the lexicon / composing integration-test fixtures.
+#[doc(hidden)]
 pub fn poj_abbrev_from_tl(tl: &str) -> String {
     derive_abbrev(&crate::api::tl_display_to_poj_display(tl))
 }

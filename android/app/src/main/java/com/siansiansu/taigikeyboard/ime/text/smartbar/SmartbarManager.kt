@@ -79,8 +79,8 @@ class SmartbarManager(
     private var isExpanded: Boolean = false
     private var hasCandidates: Boolean = false
 
-    // Keyboard total height (smartbar + keyboard)
-    private var keyboardHeight: Int = 0
+    /** Current laid-out keyboard height (smartbar + keyboard body incl. its nav-bar padding). */
+    var keyboardHeightProvider: () -> Int = { 0 }
 
     // EFFECTIVE script-flag cache (avoid DataStore async write timing issues). Holds the
     // derived Hanji-first flag (stored AND mode != ROMAN_ONLY); every strip /
@@ -144,7 +144,7 @@ class SmartbarManager(
             onLayoutSelected = { newLayoutType ->
                 textInputManager.onKeyboardLayoutTypeChanged(newLayoutType)
             },
-            getKeyboardHeight = { keyboardHeight },
+            getKeyboardHeight = { keyboardHeightProvider() },
         )
 
     private val candidateClickHandler =
@@ -175,7 +175,7 @@ class SmartbarManager(
 
     /**
      * Run the composition's next-word decision (`ComposingTransition.Effect.NextWordDecided`:
-     * the engine applied the commit's, nail's or abort's next-word handshake in the
+     * the engine applied the commit's, unnail's or abort's next-word handshake in the
      * composing call) on the underlying [NextWordController]. Wired into
      * [com.siansiansu.taigikeyboard.ime.text.composing.ComposingManager] via its
      * `nextWordRouter` constructor parameter.
@@ -564,11 +564,6 @@ class SmartbarManager(
         smartbarView?.setExpandButtonVisible(hasCandidates)
     }
 
-    fun setKeyboardHeight(height: Int) {
-        keyboardHeight = height
-        logger.debug(TAG) { "[HEIGHT] Keyboard height set to: $height" }
-    }
-
     private fun expandCandidateView() {
         logger.debug(TAG) { "[EXPAND] Expanding candidate view" }
 
@@ -590,7 +585,7 @@ class SmartbarManager(
         val display = currentDisplay()
         overlay.show(
             currentSuggestions,
-            keyboardHeight,
+            keyboardHeightProvider(),
             colorSettings.surface,
             colorSettings.candidateTextColor,
             display.themeKeyBgColor,

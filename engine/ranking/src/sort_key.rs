@@ -10,7 +10,7 @@ use crate::{source_tier_rank, CONTEXT_RANK_NONE};
 /// The twelve comparison fields, in the order [`CandidateSortKey`] uses when
 /// [`set_dev_sort_order`] has not been called. Names are what
 /// [`CandidateSortKey::deciding_field`] returns.
-pub const SORT_FIELDS: [&str; 12] = [
+const SORT_FIELDS: [&str; 12] = [
     "tier",
     "preference_class",
     "coverage_kind",
@@ -836,8 +836,6 @@ mod tests {
         // Tier 1 because end (2) != raw_len (4).
         assert_eq!(key.tier, 1);
     }
-
-    // ----- v3.5.8 Phase 9 Item 10 — `coverage_kind` dim -----
 
     #[test]
     fn coverage_kind_full_beats_partial_within_a_tier() {
