@@ -10,10 +10,10 @@ current-at-release values when cutting a dictionary refresh.
 - **Publisher**: 中華民國教育部 (MoE Taiwan)
 - **Origin URL**: <https://sutian.moe.edu.tw/>
 - **Format**: ODS (OpenDocument Spreadsheet, 19 sheets in the committed capture)
-- **Captured**: `data/raw/kautian.ods` on 2026-11-19 from
+- **Captured**: `data/raw/kautian.ods` on 2026-11-26 from
   <https://sutian.moe.edu.tw/media/senn/ods/kautian.ods>.
-  Upstream Last-Modified: 2026-11-18 18:04:12 UTC; SHA-256:
-  `19c1c7d125fe500d5a96de2322f430597f59cf57a9e93203c38b7f5583c52a09`.
+  Upstream Last-Modified: 2026-11-25 18:04:16 UTC; SHA-256:
+  `ba1cb5d503deb97c6fe6eab802a9147c1bfac091836d6faf7f6bdfb4e4bc2bb0`.
 - **Licence**: **CC BY-ND 3.0 TW** (創用CC 姓名標示-禁止改作 3.0 臺灣) — verified 2026-09-05 against the publisher's copyright notice, <https://sutian.moe.edu.tw/zh-hant/piantsip/pankhuan-singbing/>. Covers text and audio content (文字、音檔內容). **Commercial use permitted; no NonCommercial term.** This file previously recorded CC BY-NC 4.0, which was wrong. Only Hanji + romanization are taken — see `dictionary/LICENSE` for why CC BY-ND permits that.
 - **Notes**: Multi-sheet; pipeline `select`/`expand`/`merge` stages
   handle the pivoting. Largest single source (~49k rows).
@@ -46,16 +46,19 @@ current-at-release values when cutting a dictionary refresh.
   and known-key verification. The workflow commits only the Kautian capture,
   provenance, source CSV, derived variants, merged dictionary, walker statistics,
   word keys and four shipped artifacts to an `automation/kautian-*` branch,
-  then comments on the issue with a prefilled compare link. The repository's
-  workflow permissions do not let Actions create or approve PRs, so the
-  maintainer opens the PR from that link; its body closes the issue, so merging
-  it closes the issue and preserves its report. Callable Python and Engine
-  workflows validate the branch's exact commit in the same run; the
-  maintainer-opened PR then runs the regular PR checks.
+  then opens the data PR as a dedicated GitHub App (repository variable
+  `KAUTIAN_APP_CLIENT_ID`, secret `KAUTIAN_APP_PRIVATE_KEY`; installed on this
+  repository only, with contents, pull-request and issue access): the
+  repository's workflow permissions do not let `GITHUB_TOKEN` create PRs. The
+  token is minted only for the final PR step, after the rebuild. Rotate the key
+  in the App settings, then update the secret. The PR body closes the issue, so
+  merging it closes the issue and preserves its report. Callable Python and
+  Engine workflows validate the branch's exact commit in the same run; the
+  App-opened PR then runs the regular PR checks.
   Rebuild failures stop the push. Verification failures remain visible for
-  review before manual merge. A refresh branch with no closed PR (link not yet
-  used, or PR open) skips duplicate refresh creation while awaiting the
-  maintainer; daily issue reports still update.
+  review before manual merge. A refresh branch with no closed PR skips duplicate
+  refresh creation while awaiting the maintainer (one whose PR creation failed
+  gets its PR on a later run); daily issue reports still update.
   The pending refresh branch keeps its original capture; upstream changes
   arriving meanwhile are detected again after its PR merges.
   Dictionary merging preserves source and row order within official-source

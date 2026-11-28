@@ -19,7 +19,7 @@ SHELL := /usr/bin/env sh
 .DEFAULT_GOAL := help
 
 .PHONY: build protos ios-libs android-libs macos-libs test test-crate test-changed doc dict dogfood e2e help \
-        fmt lint lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths hooks scan-secrets scan-secrets-full scan-private \
+        fmt lint lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths lint-i18n hooks scan-secrets scan-secrets-full scan-private \
         i18n i18n-test \
         desktop-release desktop-patch desktop-announce version-mobile version-desktop \
         windows-check windows-release desktop-check linux-check macos-rust-check web-check web-serve web-e2e \
@@ -41,10 +41,12 @@ build:
 	@echo ""
 	@echo "✓ build complete — Xcode: Clean Build Folder ⇧⌘K → Build"
 
-# Regenerate the committed Swift (iOS + macOS) and Java protobuf bindings from
-# engine/protos/proto/, then drop the protos crate's build cache so the next
-# native build recompiles it. Needs protoc 36.2 and protoc-gen-swift; with any
-# other protoc the binding step is skipped with a warning (gen-platform-protos.sh).
+# Regenerate the committed iOS Swift + Android Java bindings from
+# engine/protos/proto/, and the macOS Swift binding from
+# macos/crates/taigi-macos-ffi/proto/, then drop the protos crate's build cache
+# so the next native build recompiles it. Needs protoc 36.2 and
+# protoc-gen-swift; with any other protoc the engine binding step is skipped
+# with a warning (gen-platform-protos.sh).
 protos:
 	@echo "==> Regenerating platform proto (Swift + Java)"
 	bash $(ENGINE)/scripts/gen-platform-protos.sh
@@ -77,8 +79,8 @@ test-crate:
 	cd $(ENGINE) && cargo test -p "$(CRATE)"
 
 # Run only the gates this branch's changes need: tools/test_select.py maps every
-# path changed since BASE (default: merge-base with origin/main; plus uncommitted
-# and untracked files) to its platform commands. PLATFORM=engine,macos narrows it;
+# path changed since BASE (default: merge-base with jj trunk(), upstream/main, or
+# origin/main; plus uncommitted and untracked files) to its platform commands. PLATFORM=engine,macos narrows it;
 # `python3 tools/test_select.py` without --run prints the selection.
 # Usage: make test-changed [BASE=origin/main] [PLATFORM=engine,macos]
 test-changed:
@@ -116,10 +118,11 @@ dict:
 i18n:
 	python3 tools/i18n/generate.py
 
-# Unit tests for the i18n codegen core (validation, escaping, scope filter, GeneratedMap, format/plural).
+# Unit tests under tools/i18n: codegen core (validation, escaping, scope filter, GeneratedMap,
+# format/plural) and the translation-suggestion apply script.
 # Pure-Python, no Android/iOS toolchain needed — runs the same logic the platform builds compile against.
 i18n-test:
-	python3 tools/i18n/test_i18n.py
+	python3 -m unittest discover -s tools/i18n -p 'test_*.py'
 
 # Generate continuous-input dogfood test table (TL/POJ/TPS + 漢字) from the
 # built dictionary.csv. Random each run; prints to stdout for manual on-device
@@ -279,6 +282,8 @@ version-mobile version-desktop:
 #           (lint-agent-rule-paths; tools/agent_rule_paths.py says why).
 #   Docs    every repo path a living doc names exists
 #           (lint-doc-paths; tools/doc_paths.py says why).
+#   i18n    generated artifacts match i18n/*.json and validation passes
+#           (lint-i18n; tools/i18n/check.py).
 # CI runs the same checks: engine.yml, desktop-shared.yml, macos.yml, web.yml, codegen-lint.yml,
 # android.yml, agent-rule-paths.yml, doc-paths.yml on pull requests; linux-build.yml nightly.
 RUST_WORKSPACES := engine desktop windows linux macos
@@ -289,7 +294,7 @@ fmt:
 	swiftformat ios macos
 	cd android && ./gradlew spotlessApply
 
-lint: lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths
+lint: lint-ps1 lint-rust-toolchain lint-swiftui-literals lint-agent-rule-paths lint-doc-paths lint-i18n
 	for ws in $(RUST_WORKSPACES); do cargo fmt --all --check --manifest-path $$ws/Cargo.toml || exit 1; done
 	cargo clippy --manifest-path $(ENGINE)/Cargo.toml --workspace --all-targets --locked -- -D warnings
 	cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked -- -D warnings
@@ -313,8 +318,11 @@ lint-agent-rule-paths:
 lint-doc-paths:
 	python3 tools/doc_paths.py
 
+lint-i18n:
+	python3 tools/i18n/check.py
+
 lint-ps1:
-	@git ls-files -z '*.ps1' | xargs -0 perl -ne 'if (/[^\t\r\n\x20-\x7e]/) { print "$$ARGV:$$.: non-ASCII byte (Windows PowerShell 5.1 reads BOM-less scripts as ANSI)\n"; $$bad = 1 } close ARGV if eof; END { exit $$bad }'
+	@perl -e 'my @cmd = (-d ".jj" && system("command -v jj >/dev/null 2>&1") == 0) ? ("jj", "--no-pager", "--color=never", "--quiet", "file", "list", "-T", q{path ++ "\0"}, "--", "root-glob:**/*.ps1") : qw(git ls-files -z -- *.ps1); open my $$ls, "-|", @cmd or die $$!; my @files = do { local $$/ = "\0"; map { chomp; $$_ } <$$ls> }; close $$ls or die "@cmd failed\n"; my (%seen, $$bad); for my $$f (@files) { next unless length($$f) && !$$seen{$$f}++ && -f $$f; open my $$fh, "<:raw", $$f or die "$$f: $$!\n"; my $$n = 0; while (<$$fh>) { $$n++; if (/[^\t\r\n\x20-\x7e]/) { print "$$f:$$n: non-ASCII byte (Windows PowerShell 5.1 reads BOM-less scripts as ANSI)\n"; $$bad = 1 } } } exit($$bad ? 1 : 0)'
 
 # Point git at the repo's tracked hooks. Per clone, not per checkout — core.hooksPath
 # lives in .git/config, so a fresh clone has no gate until this runs. That is why the
@@ -384,7 +392,7 @@ help:
 	@echo ""
 	@echo "Quality and hooks"
 	@echo "  make fmt                Apply formatting: rustfmt (5 workspaces) + SwiftFormat + Spotless"
-	@echo "  make lint               Check it: rustfmt + clippy (engine, desktop, macos, web) + web typecheck/biome + SwiftFormat + SwiftUI literals + Spotless"
+	@echo "  make lint               Check it: rustfmt + clippy (engine, desktop, macos, web) + web typecheck/biome + SwiftFormat + SwiftUI literals + Spotless + i18n"
 	@echo "  make hooks              Activate the repo's git hooks in this clone (secret scan on commit)"
 	@echo "  make scan-secrets       Scan for credentials since the last clean full scan"
 	@echo "  make scan-secrets-full  Rescan the whole history and re-baseline .gitleaks-scanned"

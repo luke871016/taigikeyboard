@@ -65,7 +65,10 @@ tools/test_select.py --run`, the commit hook and `tools/secret-scan/gitleaks-sca
 put these tools first on `PATH` through `tools/mise-path-prefix.sh`. It names each
 tool, so your global mise tools stay out: a global `rust` under `mise exec` would
 override `rust-toolchain.toml`. mise stops reading `mise.toml` when the file changes,
-so run `mise trust` if `make` warns about it.
+so run `mise trust` if `make` warns about it. For direct CLI calls to mise-pinned
+tools (`node`, `swiftformat`, `biome`, `protoc`, `gitleaks`) in non-interactive shells
+where mise is not activated, prefix the command with
+`PATH="$(sh tools/mise-path-prefix.sh)$PATH"`.
 
 Node 22 supplies `node`, `npm` and `npx` for web builds and `taigi-converter/`.
 Python stays unpinned so mise does not shadow the interpreter holding your
@@ -212,6 +215,7 @@ by macOS, so inspect the history soon after an incident.
 | `mise cannot read mise.toml` | the file changed since you last trusted it | `mise trust`, then `mise install` for any new pin |
 | `protoc-gen-swift not found` | swift-protobuf missing | `mise install`, or install the version in `macos/Package.resolved` |
 | `TaigiKeyboard needs Xcode 26.6 (Swift 6.3.3) or newer` | the selected Xcode is older | install Xcode 26.6+ and `sudo xcode-select -s` it (or set `DEVELOPER_DIR`); then delete `macos/.build` and the project's DerivedData so no artifact built by the old Swift is reused |
+| `cannot find 'AutocompleteEngineCollection' in scope` (or another missing KeyboardKit symbol after a package update) | Xcode reused a precompiled module from `DerivedData` built against an older KeyboardKit version | delete the project's `DerivedData/.../SourcePackages` and `Build/Intermediates.noindex/SwiftExplicitPrecompiledModules` (or **Product → Clean Build Folder**), then run `xcodebuild -resolvePackageDependencies -project ios/TaigiKeyboard.xcodeproj` |
 | `cargo-ndk not found` | Android native build without cargo-ndk | `mise install`, or `cargo install cargo-ndk --locked` |
 | `gitleaks is not installed` | `make scan-secrets` / the hook without gitleaks | `mise install`, or install gitleaks 8.30.1 — the version `.gitleaks-scanned` records |
 | rustup downloads Apple / Android targets on Linux | `engine/rust-toolchain.toml` target list | `RUSTUP_TOOLCHAIN=$(tools/rust-toolchain.sh)` for engine-only work |

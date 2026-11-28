@@ -8,7 +8,7 @@ Working instructions for coding agents — and for humans — in this repository
 
 ```
 android/  ios/  macos/  windows/  linux/   # platform apps
-                   # macos/ links one Rust archive, macos/crates/taigi-macos-ffi (engine seam + taigi-desktop-core)
+                   # macos/ links one Rust archive, macos/crates/taigi-macos-ffi (over taigi-desktop-core)
 engine/            # Shared Rust engine — Cargo workspace; FFI to iOS / Android / macOS, linked in-process by Windows / Linux
 web/               # Web version — taigi-web (wasm32) over taigi-desktop-core + engine, its own Cargo workspace
 desktop/           # Rust crates shared by the desktops — taigi-desktop-core (all three), -storage (Windows + Linux), -update (Windows)
@@ -54,7 +54,7 @@ emoji/             # Emoji data generator (own instructions file)
 
 Full setup: [`docs/BUILDING.md`](docs/BUILDING.md). **Bootstrap**: clone with `--recurse-submodules`, then `make build` once per machine — generates the xcframeworks and `jniLibs/*.so` the app builds link (not committed) and regenerates the committed platform protos.
 
-**Test what you touched**: `python3 tools/test_select.py --run --platform <p>` per touched platform (no args = print the selection; `make test-changed` runs the whole selection). The full suites below are for release prep or a deliberate catch-net. `make lint` runs every formatter / linter gate CI enforces.
+**Test what you touched**: `python3 tools/test_select.py --run --platform <p>` per touched platform (no args = print the selection; `make test-changed` runs the whole selection). The full suites below are for release prep or a deliberate catch-net. `make lint` runs every formatter / linter gate CI enforces. For direct CLI calls to mise-pinned tools (`node`, `swiftformat`, `biome`, `protoc`, `gitleaks`) in non-interactive shells, prefix with `PATH="$(sh tools/mise-path-prefix.sh)$PATH"` (`make` and `test_select.py --run` inject it automatically).
 
 | Platform | Build | Test |
 |---|---|---|

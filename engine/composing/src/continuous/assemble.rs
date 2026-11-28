@@ -2,7 +2,9 @@
 
 use super::dedupe::{dedupe_rendered_continuous, dedupe_same_commit_hanji, retain_absent_from};
 use super::partial_prefix::fetch_via_lexicon_partial_inner;
-use super::recase::{recase_all, recase_roman, recase_tl_as_poj_display, shows_poj_roman_in_hanji};
+use super::recase::{
+    recase_all, recase_hanji, recase_roman, recase_tl_as_poj_display, shows_poj_roman_in_hanji,
+};
 use super::walk::{synth_consumed_span, synth_cut, walker_slot0, SynthCut};
 
 use crate::shadow::{build_continuous_keys, build_partial_prefix_key, ContinuousKeys};
@@ -112,26 +114,46 @@ fn picked_extension_outranks_sentence(candidates: &[RawCandidate], raw_len: u32)
         && top_ranked.user_weight > sentence.user_weight
 }
 
-/// The shown `hanji` of each candidate (`render_hanji_display`); `display_text`
-/// keeps the stored spelling, the identity key.
+/// The shown `hanji` of each candidate (`render_hanji_display_with_leading`),
+/// its romanized words in the case typed for its consumed span of `raw`
+/// ([`recase_hanji`], the companion of the `roman` recase every caller runs
+/// first); `display_text` keeps the stored spelling, the identity key.
 fn apply_hanji_display(
     candidates: &mut [RawCandidate],
+    raw: &str,
     khinsiann: bool,
+    leading: phonetics::api::LeadingKhinsiann,
     mode: phonetics::InputMode,
 ) {
-    if !khinsiann && mode != phonetics::InputMode::Poj {
+    let renders = khinsiann || mode == phonetics::InputMode::Poj;
+    // A buffer typed without a capital has no case to raise: the common path
+    // stays a render-only (or no-op) pass.
+    let recases = raw.chars().any(char::is_uppercase);
+    if !renders && !recases {
         return;
     }
     for cand in candidates {
-        let poj_roman = shows_poj_roman_in_hanji(mode, cand.is_custom);
-        if let Some(hanji) = cand.hanji.as_mut() {
-            if let std::borrow::Cow::Owned(rendered) = phonetics::api::render_hanji_display(
-                hanji,
-                &cand.canonical_tl,
-                khinsiann,
-                poj_roman,
-            ) {
+        let Some(hanji) = cand.hanji.as_mut() else {
+            continue;
+        };
+        if renders {
+            if let std::borrow::Cow::Owned(rendered) =
+                phonetics::api::render_hanji_display_with_leading(
+                    hanji,
+                    &cand.canonical_tl,
+                    khinsiann,
+                    leading,
+                    shows_poj_roman_in_hanji(mode, cand.is_custom),
+                )
+            {
                 *hanji = rendered;
+            }
+        }
+        if recases {
+            let (start, end) = cand.consumed_span;
+            let seg = raw.get(start as usize..end as usize).unwrap_or("");
+            if let std::borrow::Cow::Owned(raised) = recase_hanji(hanji, seg, cand.is_custom) {
+                *hanji = raised;
             }
         }
     }
@@ -175,6 +197,7 @@ pub(crate) fn assemble_candidates(
     context: &ranking::ContextRanks,
     config: &protos::engine::AppConfig,
     shape: ListShape,
+    prev_in_neutral: bool,
 ) -> Assembled {
     let raw_len = raw.len() as u32;
     let enabled_sources_bitmask = crate::requests::source_filter_bitmask(config);
@@ -182,6 +205,11 @@ pub(crate) fn assemble_candidates(
     let force_lowercase_nasal_marker = config.force_lowercase_nasal_marker;
     let dedupe_commit_hanji = super::dedupe::should_dedupe_commit_hanji(config, mode);
     let khinsiann_in_hanji = config.khinsiann_in_hanji;
+    let leading_khinsiann = if khinsiann_in_hanji {
+        crate::nailed::typed_leading_khinsiann(raw, prev_in_neutral, true)
+    } else {
+        phonetics::api::LeadingKhinsiann::None
+    };
     let roman_twins = crate::requests::lists_roman_twins(config, mode);
     LexiconHandle::with_state(|state| {
         let inv = state.syllable_inventory.as_ref();
@@ -303,7 +331,13 @@ pub(crate) fn assemble_candidates(
                     ctx,
                     fetch_partial_prefix_candidates,
                 );
-                apply_hanji_display(&mut partial, khinsiann_in_hanji, mode);
+                apply_hanji_display(
+                    &mut partial,
+                    raw,
+                    khinsiann_in_hanji,
+                    leading_khinsiann,
+                    mode,
+                );
                 partial
             } else {
                 Vec::new()
@@ -354,16 +388,17 @@ pub(crate) fn assemble_candidates(
             // `tui` and tap commits it verbatim (display == commit).
             // This is the single casing source (the platform
             // `SuggestionCaseTransformer`s were removed 2026-10-04).
-            // Only the presentation `roman` is touched —
-            // `display_text` (canonical freq/NextWord key) and
-            // `hanji` are deliberately left intact.
+            // Only the presentation `roman` and the shown `hanji`'s
+            // romanized words (`apply_hanji_display`, after its render)
+            // are touched — `display_text` (canonical freq/NextWord key)
+            // is deliberately left intact.
             for cand in &mut c {
                 let (cs, ce) = cand.consumed_span;
                 if let Some(seg) = raw.get(cs as usize..ce as usize) {
                     cand.roman = recase_roman(&cand.roman, seg);
                 }
             }
-            apply_hanji_display(&mut c, khinsiann_in_hanji, mode);
+            apply_hanji_display(&mut c, raw, khinsiann_in_hanji, leading_khinsiann, mode);
             // ---- Step 4: walker slot-0 prepend (all modes).
             // v3.5.8 S2 — whole-sentence walker. The synthesized
             // full-buffer best path is explicitly prepended at slot 0
@@ -419,7 +454,7 @@ pub(crate) fn assemble_candidates(
                         .filter(|cut| shape == ListShape::Sentence || cut.path.edges.len() == 1);
                     if let Some(slot0) = synth
                         .as_ref()
-                        .map(|cut| walker_slot0(raw, continuous_keys, ctx, cut))
+                        .map(|cut| walker_slot0(raw, continuous_keys, ctx, cut, prev_in_neutral))
                     {
                         let composed_from_edges = slot0.edge_count >= 2;
                         // R2 identity sidechannel: read the canonical TL the
@@ -647,7 +682,7 @@ pub(crate) fn assemble_candidates(
                         ctx,
                         fetch_partial_prefix_candidates_unbounded,
                     );
-                    apply_hanji_display(&mut ext, khinsiann_in_hanji, mode);
+                    apply_hanji_display(&mut ext, raw, khinsiann_in_hanji, leading_khinsiann, mode);
                     // Borrowed key shape — `c` is not mutated during the
                     // retain on `ext`, so HashSet entries can hold &str
                     // slices into `c` and avoid per-keystroke String allocs.
@@ -701,7 +736,13 @@ pub(crate) fn assemble_candidates(
             if let Some(key) = crate::shadow::abbrev_query_key(raw, mode) {
                 let mut abbrev = lexicon::fetch_abbrev_candidates(&key, raw_len, ctx);
                 recase_all(&mut abbrev, raw);
-                apply_hanji_display(&mut abbrev, khinsiann_in_hanji, mode);
+                apply_hanji_display(
+                    &mut abbrev,
+                    raw,
+                    khinsiann_in_hanji,
+                    leading_khinsiann,
+                    mode,
+                );
                 retain_absent_from(&candidates, &mut abbrev);
                 abbrev.truncate(PARTIAL_PREFIX_OUTPUT_CAP);
                 appended_blocks |= !abbrev.is_empty();
@@ -850,6 +891,7 @@ pub(crate) fn assemble_candidates(
         if mode == phonetics::InputMode::Poj
             || syllable_joiner.is_some()
             || typed_separators_rendered
+            || leading_khinsiann != phonetics::api::LeadingKhinsiann::None
         {
             dedupe_rendered_continuous(&mut candidates);
         }

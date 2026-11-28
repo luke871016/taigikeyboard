@@ -2,8 +2,9 @@
 """Select the build / test commands a change needs — "test only what changed".
 
 Changed files come from `--base <ref>` (`git diff <base>...HEAD` plus staged,
-unstaged and untracked files; default base = merge-base with origin/main),
-`--range A..B` (a finished range, e.g. `<merge>^1..<merge>`), or `--paths`.
+unstaged and untracked files; default base = merge-base with jj trunk(),
+upstream/main, or origin/main), `--range A..B` (a finished range, e.g.
+`<merge>^1..<merge>`), or `--paths`.
 Each path maps to commands grouped by platform (PLATFORMS below).
 
 Engine: a path under an engine crate selects that crate and every workspace
@@ -13,16 +14,16 @@ reaches the dependent's tests, not the dependent's own dependents). A change
 only under a crate's `tests/` or `benches/` selects that crate alone. protos,
 the workspace manifest, lockfile or toolchain select every crate. Shipped
 dispatch code reaching the selection also selects desktop + windows + linux +
-web, which link dispatch; a direct change to the FFI wire surface (protos, dispatch,
-swift-ffi, android-jni, engine/scripts) also selects ios + android + macos
-behind the stale-artifact prerequisite `make build`.
+web, which link dispatch; a direct change to an FFI wire crate selects its
+linked platforms behind the stale-artifact prerequisite `make build` (`protos` /
+`dispatch` / `engine/scripts` -> `ios` + `android` + `macos`; `swift-ffi` ->
+`ios`; `android-jni` -> `android`).
 
 macOS has two gates: `macos-rust` (the macOS Cargo workspace's native tests +
 clippy + fmt) and `macos` (the Swift suite). An input of the archive the app
 links — `macos/crates/**`, the workspace manifest / lockfile / toolchain, and
 `desktop/**` — selects both, behind `make build`; an engine change reaching
-swift-ffi selects `macos-rust`, as one reaching dispatch selects the desktop
-shells.
+`dispatch` selects `macos-rust`, as it selects the other desktop shells.
 
 A path no rule covers is reported as unmapped (exit 2): add its rule here.
 
@@ -68,9 +69,14 @@ ENGINE_WHOLE_WORKSPACE_FILES = {
     "engine/Cargo.lock",
     "engine/rust-toolchain.toml",
 }
-# Crates whose change is a wire-surface change for the platforms that link the
-# engine binary (the committed bindings / xcframework / jniLibs).
-WIRE_SURFACE_CRATES = {"protos", "dispatch", "swift-ffi", "android-jni"}
+# Crates whose change is a wire-surface change mapped to the platforms that link
+# that crate (the committed bindings / xcframework / jniLibs).
+WIRE_SURFACE_PLATFORMS: dict[str, set[str]] = {
+    "protos": {"ios", "android", "macos"},
+    "dispatch": {"ios", "android", "macos"},
+    "swift-ffi": {"ios"},
+    "android-jni": {"android"},
+}
 # Crates a desktop shell links directly (desktop/, windows/, linux/ Cargo.toml);
 # web/ links them through taigi-desktop-core.
 DESKTOP_LINKED_CRATE = "dispatch"
@@ -90,9 +96,6 @@ MACOS_RUST_PATHS = (
     "macos/Cargo.lock",
     "macos/rust-toolchain.toml",
 )
-# The engine crate whose closure the macOS archive links (with dispatch and
-# protos, both below it).
-MACOS_LINKED_CRATE = "swift-ffi"
 ADMIN_LANE_NOTE = "no build/test gate (admin lane)"
 
 # Top-level directories whose files need no build or test gate.
@@ -192,7 +195,7 @@ class Effects:
     engine_crates: set[str] = field(default_factory=set)  # with reverse closure
     engine_leaf_crates: set[str] = field(default_factory=set)  # that crate only
     engine_whole: bool = False
-    wire_surface: bool = False
+    wire_platforms: set[str] = field(default_factory=set)
     macos_archive: bool = False  # an input of the archive the Swift app links
     platforms: set[str] = field(default_factory=set)  # whole-platform gates
     python: set[str] = field(default_factory=set)  # PYTHON_SUITES keys
@@ -223,7 +226,7 @@ def add_engine_path(path: str, graph: EngineGraph, effects: Effects) -> None:
         return
     if path.startswith("engine/scripts/"):
         # Binding / xcframework / jniLibs build scripts: no Rust test reads them.
-        effects.wire_surface = True
+        effects.wire_platforms |= {"ios", "android", "macos"}
         return
     if path == "engine/deny.toml":
         effects.notes.append("engine/deny.toml: cargo-deny runs in CI (rust-audit.yml)")
@@ -235,15 +238,14 @@ def add_engine_path(path: str, graph: EngineGraph, effects: Effects) -> None:
         return
     if crate == "protos":
         effects.engine_whole = True
-        effects.wire_surface = True
+        effects.wire_platforms |= WIRE_SURFACE_PLATFORMS["protos"]
         return
     inside = path[len(graph.crate_dirs[crate]) + 1 :]
     if inside.startswith(LEAF_ONLY_SUBDIRS):
         effects.engine_leaf_crates.add(crate)
         return
     effects.engine_crates.add(crate)
-    if crate in WIRE_SURFACE_CRATES:
-        effects.wire_surface = True
+    effects.wire_platforms.update(WIRE_SURFACE_PLATFORMS.get(crate, ()))
 
 
 def add_dictionary_path(path: str, effects: Effects) -> None:
@@ -390,7 +392,7 @@ PLATFORM_COMMANDS = {
         Command("android/gradlew -p android :app:spotlessCheck :app:testDebugUnitTest")
     ],
     "i18n": [
-        Command("python3 tools/i18n/test_i18n.py"),
+        Command("python3 -m unittest discover -s tools/i18n -p 'test_*.py'"),
         Command("python3 tools/i18n/check.py"),
     ],
     "converter": [Command("npm test", "taigi-converter")],
@@ -409,13 +411,10 @@ def select(paths: Iterable[str], graph: EngineGraph) -> Selection:
     )
     selected = shipped | effects.engine_leaf_crates
     if DESKTOP_LINKED_CRATE in shipped:
-        platforms |= {"desktop", "windows", "linux", "web"}
-    if MACOS_LINKED_CRATE in shipped:
-        platforms.add("macos-rust")
-    if effects.wire_surface:
-        platforms |= {"ios", "android", "macos"}
+        platforms |= {"desktop", "windows", "linux", "web", "macos-rust"}
+    platforms |= effects.wire_platforms
     prerequisites = []
-    if effects.wire_surface or effects.macos_archive:
+    if effects.wire_platforms or effects.macos_archive:
         prerequisites.append(MAKE_BUILD_PREREQUISITE)
 
     commands: dict[str, list[Command]] = {}
@@ -449,9 +448,9 @@ def select(paths: Iterable[str], graph: EngineGraph) -> Selection:
     return Selection(ordered, notes, prerequisites, effects.unmapped, engine_crates)
 
 
-def git(*args: str) -> str:
+def git(*args: str, root: Path = ROOT) -> str:
     return subprocess.run(
-        ["git", "-C", str(ROOT), "-c", "core.quotepath=false", *args],
+        ["git", "-C", str(root), "-c", "core.quotepath=false", *args],
         check=True,
         capture_output=True,
         text=True,
@@ -476,8 +475,56 @@ def changed_in_range(range_spec: str) -> list[str]:
     return sorted(set(split_z(git("diff", "--name-only", "-z", start, end))))
 
 
-def default_base() -> str:
-    return git("merge-base", "origin/main", "HEAD").strip()
+def _jj_trunk(root: Path = ROOT) -> str | None:
+    if not (root / ".jj").exists():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "jj",
+                "--ignore-working-copy",
+                "-R",
+                str(root),
+                "log",
+                "-r",
+                "trunk()",
+                "--no-graph",
+                "-T",
+                r'commit_id ++ "\n"',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    commits = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return commits[0] if len(commits) == 1 else None
+
+
+def _git_ref_exists(ref: str, root: Path = ROOT) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", ref],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+
+
+def default_base(root: Path = ROOT) -> str:
+    ref = _jj_trunk(root)
+    if ref is None:
+        ref = (
+            "upstream/main"
+            if _git_ref_exists("refs/remotes/upstream/main", root)
+            else "origin/main"
+        )
+    return git("merge-base", ref, "HEAD", root=root).strip()
 
 
 def print_selection(selection: Selection, changed: list[str]) -> None:
@@ -533,7 +580,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--base",
-        help="diff <base>...HEAD + working tree (default: merge-base with origin/main)",
+        help="diff <base>...HEAD + working tree (default: merge-base with jj trunk(), upstream/main, or origin/main)",
     )
     source.add_argument("--range", help="A..B: the files changed between two commits")
     source.add_argument("--paths", nargs="+", help="explicit repo-relative paths")

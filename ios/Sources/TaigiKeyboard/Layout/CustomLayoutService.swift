@@ -44,7 +44,7 @@ class CustomLayoutService {
 
         switch context.keyboardType {
         case .alphabetic:
-            return selectAlphabeticLayout(settings: settings, needsGlobe: needsGlobe, inputType: context.keyboardInputType)
+            return selectAlphabeticLayout(settings: settings, needsGlobe: needsGlobe, inputType: context.textInputType)
         case .numeric:
             return resolveLayout(withGlobe: TaigiLayouts.Numeric.withGlobe, iPhone: TaigiLayouts.Numeric.iPhone, needsGlobe: needsGlobe)
         case .symbolic:
@@ -73,7 +73,7 @@ class CustomLayoutService {
     private func selectAlphabeticLayout(
         settings: SharedSettings,
         needsGlobe: Bool,
-        inputType: Keyboard.InputType,
+        inputType: Keyboard.TextInputType,
     ) -> [[KeyDef]] {
         let layouts = TaigiLayouts.Alphabetic.self
         let rows: [[KeyDef]]
@@ -85,9 +85,13 @@ class CustomLayoutService {
         }
 
         // TPS mode or layout — inputMode takes priority over keyboardLayoutType. TPS rows get no
-        // input-type key (Android `tps_halfwidth.json` has none).
+        // input-type key (Android `tps_halfwidth.json` has none). A TPS custom layout replaces the
+        // table; the guard keeps a romanization one (live only while the layout is not TPS) out.
         let layoutType = settings.keyboardLayoutType
         if settings.inputMode == .tps || layoutType == .tps {
+            if let custom = settings.activeCustomLayout, custom.base == .tps {
+                return custom.rows(withGlobe: needsGlobe)
+            }
             return layouts.table(.tps, script: .tl, withGlobe: needsGlobe)
         }
 
@@ -108,7 +112,7 @@ class CustomLayoutService {
     // CROSS-PLATFORM INVARIANT — mirrors the Android `mod/*.json` bottom-row
     // `email_address` / `uri` variants: default / english / moe2 swap `,`;
     // moe1 / phah_taigi add the key in those fields only.
-    static func applyInputTypeKey(_ rows: [[KeyDef]], inputType: Keyboard.InputType) -> [[KeyDef]] {
+    static func applyInputTypeKey(_ rows: [[KeyDef]], inputType: Keyboard.TextInputType) -> [[KeyDef]] {
         let key: String
         switch inputType {
         case .emailAddress: key = "@"

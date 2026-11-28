@@ -96,10 +96,7 @@ final class CustomDictionaryPageModel {
             let csv = try await UserDataRequests.run(on: client) { try $0.exportCSV() }
             try await panels.write(
                 csv,
-                suggestedName: UserDataFilePanels.exportFileName(
-                    prefix: "taigi_custom_dictionary",
-                    extension: "csv",
-                ),
+                suggestedName: UserDataFilePanels.exportFileName(kind: .customCsv),
                 contentTypes: [.commaSeparatedText],
                 in: window,
             )
@@ -141,6 +138,8 @@ final class CustomDictionaryPageModel {
     private func importAndReload(_ body: () async throws -> UserDataPageMessage) async {
         do {
             message = try await body()
+        } catch UserDataClientError.refused(refusal: .notUtf8, detail: _) {
+            message = .notUTF8
         } catch {
             message = .failure(.commonImportFailed, error)
         }
@@ -198,7 +197,9 @@ struct CustomDictionaryPage: View {
     var body: some View {
         Form {
             Section {
-                Toggle(language.string(.dictionaryCustomDictEnabled), isOn: $isCustomDictEnabled)
+                Toggle(isOn: $isCustomDictEnabled) {
+                    SettingsRowLabel(titleKey: .dictionaryCustomDictEnabled)
+                }
             }
 
             Section {
@@ -234,7 +235,7 @@ struct CustomDictionaryPage: View {
             Task { await model.load() }
         }
         .sheet(item: $editing) { row in
-            CustomDictionaryEntrySheet(row: row, isNew: row.roman.isEmpty) { edited in
+            CustomDictionaryEntrySheet(row: row, isNew: row.id.isEmpty) { edited in
                 Task { await model.save(edited) }
             }
         }

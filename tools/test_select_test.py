@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
+
+_TOOLS_DIR = str(Path(__file__).resolve().parent)
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
 
 import test_select
 from test_select import DOCS_CHECKS, ROOT, Command
@@ -64,8 +74,8 @@ class EngineGraphTests(SelectorTestCase):
 
 class EngineSelectionTests(SelectorTestCase):
     def test_leaf_source_change_selects_closure_and_desktop_shells(self) -> None:
-        # dispatch reaches the Windows / Linux shells, swift-ffi the macOS
-        # workspace's native gate; neither is a wire-surface change.
+        # dispatch reaches the Windows, Linux, Web, and macOS Rust shells;
+        # neither is a wire-surface change.
         selection = self.select("engine/phonetics/src/tl.rs")
 
         self.assertIn("dispatch", selection.engine_crates)
@@ -119,13 +129,22 @@ class EngineSelectionTests(SelectorTestCase):
         self.assertEqual(selection.engine_crates, list(self.graph.crates))
         self.assertNotIn("ios", selection.commands)
 
-    def test_wire_surface_crate_selects_mobile(self) -> None:
+    def test_wire_surface_crate_selects_ios_only(self) -> None:
         selection = self.select("engine/swift-ffi/src/lib.rs")
 
         self.assertEqual(selection.engine_crates, ["swift-ffi"])
         self.assertEqual(
             set(selection.commands),
-            {"engine", "macos-rust", "macos", "ios", "android", "docs-checks"},
+            {"engine", "ios", "docs-checks"},
+        )
+
+    def test_android_jni_selects_android_only(self) -> None:
+        selection = self.select("engine/android-jni/src/lib.rs")
+
+        self.assertEqual(selection.engine_crates, ["android-jni"])
+        self.assertEqual(
+            set(selection.commands),
+            {"engine", "android", "docs-checks"},
         )
 
     def test_engine_build_script_selects_mobile_only(self) -> None:
@@ -324,15 +343,237 @@ class PlatformSelectionTests(SelectorTestCase):
         self.assertEqual(selection.unmapped, ["newdir/thing.txt"])
 
 
-class CoverageGuardTests(SelectorTestCase):
-    def test_every_tracked_file_has_a_rule(self) -> None:
-        tracked = subprocess.run(
-            ["git", "-C", str(ROOT), "-c", "core.quotepath=false", "ls-files", "-z"],
+class DefaultBaseTests(unittest.TestCase):
+    def _git(self, repo: Path, *args: str) -> str:
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def _init_repo(self, repo: Path) -> str:
+        self._git(repo, "init", "-b", "main")
+        self._git(repo, "commit", "--allow-empty", "-m", "root")
+        return self._git(repo, "rev-parse", "HEAD")
+
+    def _commit(self, repo: Path, message: str) -> str:
+        self._git(repo, "commit", "--allow-empty", "-m", message)
+        return self._git(repo, "rev-parse", "HEAD")
+
+    def test_plain_git_repo_uses_origin_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            origin_main = self._init_repo(repo)
+            self._git(repo, "update-ref", "refs/remotes/origin/main", origin_main)
+            self._commit(repo, "branch")
+
+            self.assertEqual(test_select.default_base(repo), origin_main)
+
+    def test_fork_prefers_upstream_main_over_stale_origin_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            stale_origin = self._init_repo(repo)
+            upstream_main = self._commit(repo, "upstream")
+            self._git(repo, "update-ref", "refs/remotes/origin/main", stale_origin)
+            self._git(repo, "update-ref", "refs/remotes/upstream/main", upstream_main)
+            self._commit(repo, "branch")
+
+            self.assertEqual(test_select.default_base(repo), upstream_main)
+
+    def test_upstream_remote_without_upstream_main_falls_back_to_origin_main(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            origin_main = self._init_repo(repo)
+            self._git(
+                repo, "remote", "add", "upstream", "https://example.com/upstream.git"
+            )
+            self._git(repo, "update-ref", "refs/remotes/origin/main", origin_main)
+            self._commit(repo, "branch")
+
+            self.assertEqual(test_select.default_base(repo), origin_main)
+
+    def test_jj_repo_uses_jj_trunk_over_older_git_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".jj").mkdir()
+            stale_origin = self._init_repo(repo)
+            older_upstream = self._commit(repo, "upstream")
+            jj_trunk = self._commit(repo, "trunk")
+            self._git(repo, "update-ref", "refs/remotes/origin/main", stale_origin)
+            self._git(repo, "update-ref", "refs/remotes/upstream/main", older_upstream)
+            self._commit(repo, "branch")
+
+            real_run = subprocess.run
+
+            def fake_run(cmd, *args, **kwargs):
+                if cmd[0] == "jj":
+                    self.assertEqual(
+                        cmd,
+                        [
+                            "jj",
+                            "--ignore-working-copy",
+                            "-R",
+                            str(repo),
+                            "log",
+                            "-r",
+                            "trunk()",
+                            "--no-graph",
+                            "-T",
+                            r'commit_id ++ "\n"',
+                        ],
+                    )
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout=f"{jj_trunk}\n", stderr=""
+                    )
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(test_select.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(test_select.default_base(repo), jj_trunk)
+
+    def test_jj_fallback_when_jj_fails_or_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".jj").mkdir()
+            stale_origin = self._init_repo(repo)
+            upstream_main = self._commit(repo, "upstream")
+            self._git(repo, "update-ref", "refs/remotes/origin/main", stale_origin)
+            self._git(repo, "update-ref", "refs/remotes/upstream/main", upstream_main)
+            self._commit(repo, "branch")
+
+            real_run = subprocess.run
+
+            def fail_jj(cmd, *args, **kwargs):
+                if cmd[0] == "jj":
+                    return subprocess.CompletedProcess(
+                        cmd, 1, stdout="", stderr="error"
+                    )
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(test_select.subprocess, "run", side_effect=fail_jj):
+                self.assertEqual(test_select.default_base(repo), upstream_main)
+
+            def missing_jj(cmd, *args, **kwargs):
+                if cmd[0] == "jj":
+                    raise FileNotFoundError("jj")
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(
+                test_select.subprocess, "run", side_effect=missing_jj
+            ):
+                self.assertEqual(test_select.default_base(repo), upstream_main)
+
+    def test_repo_without_jj_dir_does_not_invoke_jj(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            origin_main = self._init_repo(repo)
+            self._git(repo, "update-ref", "refs/remotes/origin/main", origin_main)
+            self._commit(repo, "branch")
+
+            real_run = subprocess.run
+            calls = []
+
+            def spy_run(cmd, *args, **kwargs):
+                calls.append(cmd[0])
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(test_select.subprocess, "run", side_effect=spy_run):
+                self.assertEqual(test_select.default_base(repo), origin_main)
+
+            self.assertNotIn("jj", calls)
+
+
+def _working_tree_paths(root: Path) -> list[str]:
+    listed: str | None = None
+    if (root / ".jj").is_dir():
+        try:
+            listed = subprocess.run(
+                [
+                    "jj",
+                    "--no-pager",
+                    "--color=never",
+                    "--quiet",
+                    "-R",
+                    str(root),
+                    "file",
+                    "list",
+                    "-T",
+                    r'path ++ "\0"',
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        except FileNotFoundError:
+            listed = None
+    if listed is None:
+        listed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "core.quotepath=false",
+                "ls-files",
+                "-z",
+            ],
             check=True,
             capture_output=True,
             text=True,
         ).stdout
-        paths = [path for path in tracked.split("\0") if path]
+    return sorted(
+        {
+            path
+            for path in listed.split("\0")
+            if path and ((root / path).exists() or (root / path).is_symlink())
+        }
+    )
+
+
+class CoverageGuardTests(SelectorTestCase):
+    def _init_git_repo(self, repo: Path) -> None:
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".gitignore").write_text("ignored_dir/\n*.log\n", encoding="utf-8")
+        (repo / "kept.txt").write_text("kept\n", encoding="utf-8")
+        (repo / "deleted.txt").write_text("gone\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", ".gitignore", "kept.txt", "deleted.txt"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+            check=True,
+        )
+
+    def test_every_tracked_file_has_a_rule(self) -> None:
+        paths = _working_tree_paths(ROOT)
 
         effects = test_select.effects_of(paths, self.graph)
 
@@ -342,6 +583,121 @@ class CoverageGuardTests(SelectorTestCase):
             "give each new top-level directory a rule in tools/test_select.py "
             "(effects_of, or NO_GATE_DIRS when it needs no gate)",
         )
+
+    def test_plain_git_skips_deleted_and_untracked_without_invoking_jj(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self._init_git_repo(repo)
+            (repo / "deleted.txt").unlink()
+            (repo / "newdir").mkdir()
+            (repo / "newdir" / "thing.txt").write_text("new\n", encoding="utf-8")
+
+            real_run = subprocess.run
+            calls = []
+
+            def spy_run(cmd, *args, **kwargs):
+                calls.append(cmd[0])
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(subprocess, "run", side_effect=spy_run):
+                paths = _working_tree_paths(repo)
+
+            self.assertNotIn("jj", calls)
+            self.assertEqual(paths, [".gitignore", "kept.txt"])
+
+    def test_jj_repo_uses_jj_file_list_and_falls_back_when_jj_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self._init_git_repo(repo)
+            (repo / ".jj").mkdir()
+            (repo / "deleted.txt").unlink()
+            (repo / "newdir").mkdir()
+            (repo / "newdir" / "thing.txt").write_text("new\n", encoding="utf-8")
+
+            real_run = subprocess.run
+
+            def fake_jj(cmd, *args, **kwargs):
+                if cmd[0] == "jj":
+                    self.assertEqual(
+                        cmd,
+                        [
+                            "jj",
+                            "--no-pager",
+                            "--color=never",
+                            "--quiet",
+                            "-R",
+                            str(repo),
+                            "file",
+                            "list",
+                            "-T",
+                            r'path ++ "\0"',
+                        ],
+                    )
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=".gitignore\0kept.txt\0deleted.txt\0newdir/thing.txt\0",
+                        stderr="",
+                    )
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(subprocess, "run", side_effect=fake_jj):
+                self.assertEqual(
+                    _working_tree_paths(repo),
+                    [".gitignore", "kept.txt", "newdir/thing.txt"],
+                )
+
+            def missing_jj(cmd, *args, **kwargs):
+                if cmd[0] == "jj":
+                    raise FileNotFoundError("jj")
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(subprocess, "run", side_effect=missing_jj):
+                self.assertEqual(_working_tree_paths(repo), [".gitignore", "kept.txt"])
+
+    @unittest.skipUnless(shutil.which("jj"), "jj not installed")
+    def test_real_jj_tracks_new_dirs_and_respects_auto_track_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            cfg = root / "jj.toml"
+            cfg.write_text('[user]\nname = "Test"\nemail = "test@example.com"\n', encoding="utf-8")
+            with mock.patch.dict(os.environ, {"JJ_CONFIG": str(cfg)}):
+                subprocess.run(
+                    ["jj", "git", "init", "--colocate", str(repo)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                (repo / ".gitignore").write_text("ignored_dir/\n*.log\n", encoding="utf-8")
+                (repo / "kept.txt").write_text("kept\n", encoding="utf-8")
+                (repo / "deleted.txt").write_text("gone\n", encoding="utf-8")
+                subprocess.run(
+                    ["jj", "-R", str(repo), "commit", "-m", "init"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+                (repo / "deleted.txt").unlink()
+                (repo / "newdir").mkdir()
+                (repo / "newdir" / "thing.txt").write_text("new\n", encoding="utf-8")
+                (repo / "ignored_dir").mkdir()
+                (repo / "ignored_dir" / "skip.txt").write_text("ignored\n", encoding="utf-8")
+                (repo / "skip.log").write_text("ignored\n", encoding="utf-8")
+
+                self.assertEqual(
+                    _working_tree_paths(repo),
+                    [".gitignore", "kept.txt", "newdir/thing.txt"],
+                )
+
+                cfg.write_text(
+                    '[user]\nname = "Test"\nemail = "test@example.com"\n[snapshot]\nauto-track = "none()"\n',
+                    encoding="utf-8",
+                )
+                (repo / "untracked_dir").mkdir()
+                (repo / "untracked_dir" / "skip.txt").write_text("u\n", encoding="utf-8")
+                self.assertNotIn("untracked_dir/skip.txt", _working_tree_paths(repo))
 
 
 if __name__ == "__main__":

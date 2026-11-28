@@ -15,15 +15,25 @@ struct StringResolver {
     let language: DisplayLanguage
 
     init(_ language: DisplayLanguage) {
-        // Fail fast on a boundary regression, mirroring iOS StringResolver.swift:26: `assert` is
-        // DEBUG-only, so release degrades to the Hanji fallback (`.system` → lookup nil → hanjiDefault)
+        // Fail fast on a boundary regression, mirroring `taigi-desktop-core` `StringResolver::new`
+        // (`strings/mod.rs`): `assert` is DEBUG-only, so release normalizes `.system` to `.hanji`
         // rather than crashing the input method out from under whatever the user is typing into.
         assert(language != .system, "StringResolver must be built from an effective language, never .system")
-        self.language = language
+        self.language = Self.normalizedLanguage(language)
+    }
+
+    /// Normalizes `.system` to `.hanji` for release builds; all concrete languages pass through.
+    static func normalizedLanguage(_ language: DisplayLanguage) -> DisplayLanguage {
+        language == .system ? .hanji : language
     }
 
     func resolve(_ key: StringKey) -> String {
         GeneratedStrings.lookup(language, key) ?? hanjiDefault(key)
+    }
+
+    /// Resolves the companion caption for `key`, or `nil` when none is paired.
+    func caption(for key: StringKey) -> String? {
+        key.infoKey.map(resolve)
     }
 
     /// Resolves a format key's template under the active language and interpolates `args`. The single

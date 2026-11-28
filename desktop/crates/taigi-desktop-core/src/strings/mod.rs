@@ -12,6 +12,8 @@ mod generated;
 
 pub use generated::StringKey;
 
+use crate::platform::DesktopPlatform;
+
 /// The languages the UI can be shown in. `System` is a selection policy, not a
 /// language: it resolves to one of the others through [`DisplayLanguage::resolve_automatic`]
 /// and is never handed to a [`StringResolver`].
@@ -154,6 +156,12 @@ impl StringResolver {
             .unwrap_or_else(|| key.as_str())
     }
 
+    /// Secondary caption for `key` under the active language on `platform`, or
+    /// `None` when no caption key is paired with `key` for that platform.
+    pub fn caption(&self, key: StringKey, platform: DesktopPlatform) -> Option<&'static str> {
+        key.info_key(platform).map(|info| self.resolve(info))
+    }
+
     /// The template behind a format key, filled with `args` by position.
     pub fn format(&self, key: StringKey, args: &[&dyn std::fmt::Display]) -> String {
         format_positional(self.resolve(key), args)
@@ -258,8 +266,28 @@ mod tests {
             DisplayLanguage::Japanese
         );
         assert_eq!(
+            DisplayLanguage::resolve_automatic("JA-JP"),
+            DisplayLanguage::Japanese
+        );
+        assert_eq!(
             DisplayLanguage::resolve_automatic("en_US"),
             DisplayLanguage::English
+        );
+        assert_eq!(
+            DisplayLanguage::resolve_automatic("EN_US"),
+            DisplayLanguage::English
+        );
+        assert_eq!(
+            DisplayLanguage::resolve_automatic("jav"),
+            DisplayLanguage::Hanji
+        );
+        assert_eq!(
+            DisplayLanguage::resolve_automatic("jam"),
+            DisplayLanguage::Hanji
+        );
+        assert_eq!(
+            DisplayLanguage::resolve_automatic("eng"),
+            DisplayLanguage::Hanji
         );
         assert_eq!(
             DisplayLanguage::resolve_automatic("zh-TW"),
@@ -296,6 +324,99 @@ mod tests {
                 resolver.resolve(StringKey::DesktopGeneralTab),
                 StringKey::DesktopGeneralTab.as_str(),
                 "{language:?} lacks DesktopGeneralTab"
+            );
+        }
+    }
+
+    #[test]
+    fn uncaptioned_key_returns_none_for_caption() {
+        let resolver = StringResolver::new(DisplayLanguage::English);
+        for platform in crate::platform::test_support::ALL_PLATFORMS {
+            assert_eq!(StringKey::ThemeEditorResetAll.info_key(platform), None);
+            assert_eq!(
+                resolver.caption(StringKey::ThemeEditorResetAll, platform),
+                None
+            );
+        }
+    }
+    #[test]
+    fn desktop_captions_resolve_across_production_languages_on_linux_and_windows() {
+        let expected_pairs = [
+            (
+                StringKey::SettingsToneSchemeStandard,
+                StringKey::SettingsToneSchemeStandardInfo,
+            ),
+            (
+                StringKey::SettingsToneSchemeTelex,
+                StringKey::SettingsToneSchemeTelexInfo,
+            ),
+            (
+                StringKey::SettingsHanLoMixed,
+                StringKey::SettingsHanLoMixedInfo,
+            ),
+            (
+                StringKey::SettingsLiteralRomanCandidate,
+                StringKey::DesktopLiteralRomanCandidateInfo,
+            ),
+            (
+                StringKey::SettingsOutputBothScripts,
+                StringKey::SettingsOutputBothScriptsInfo,
+            ),
+            (
+                StringKey::SettingsKhinsiannInHanji,
+                StringKey::SettingsKhinsiannInHanjiInfo,
+            ),
+            (
+                StringKey::SettingsSyllableSeparator,
+                StringKey::SettingsSyllableSeparatorInfo,
+            ),
+            (
+                StringKey::SettingsAutoSpace,
+                StringKey::SettingsAutoSpaceInfo,
+            ),
+        ];
+
+        let platforms = [DesktopPlatform::Linux, DesktopPlatform::Windows];
+        for platform in platforms {
+            for (base_key, info_key) in expected_pairs {
+                assert_eq!(
+                    base_key.info_key(platform),
+                    Some(info_key),
+                    "expected {platform:?} caption for {base_key:?}"
+                );
+            }
+
+            for language in DisplayLanguage::PICKER.into_iter().skip(1) {
+                let resolver = StringResolver::new(language);
+                for (base_key, info_key) in expected_pairs {
+                    let caption = resolver.caption(base_key, platform).unwrap_or_else(|| {
+                        panic!("{base_key:?} missing {platform:?} caption in {language:?}")
+                    });
+                    assert!(
+                        !caption.is_empty(),
+                        "{base_key:?} empty {platform:?} caption in {language:?}"
+                    );
+                    assert_ne!(
+                        caption,
+                        base_key.as_str(),
+                        "{base_key:?} fell back to raw key in {language:?}"
+                    );
+                    assert_eq!(
+                        caption,
+                        resolver.resolve(info_key),
+                        "caption mismatch for {base_key:?} on {platform:?} in {language:?}"
+                    );
+                }
+            }
+
+            let english = StringResolver::new(DisplayLanguage::English);
+            assert_eq!(
+                english.caption(StringKey::SettingsToneSchemeStandard, platform),
+                Some("Type 1–9 after a syllable for its tone (e.g. tai5 → tâi).")
+            );
+            assert_eq!(
+                english.caption(StringKey::SettingsLiteralRomanCandidate, platform),
+                Some("Shows what you typed as the first candidate. When off, use “Output What You Are Typing” to commit it.")
             );
         }
     }
